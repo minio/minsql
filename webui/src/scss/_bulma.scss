@@ -1,0 +1,14 @@
+$input-shadow: none;
+$input-focus-box-shadow-size: none;
+$input-focus-border-color: hsl(0, 0%, 71%);
+
+$navbar-box-shadow-size: 0 1px 6px 0;
+$navbar-box-shadow-color: rgba(32, 33, 36, 0.28);
+
+$box-radius: 0;
+
+@import "../../node_modules/bulma/bulma.sass";
+
+.navbar {
+  padding: 10px;
+}

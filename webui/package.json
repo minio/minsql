@@ -1,0 +1,37 @@
+{
+  "name": "webui",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "bulma": "^0.7.4",
+    "classnames": "^2.2.6",
+    "downshift": "^3.2.7",
+    "filesize": "^4.1.2",
+    "formik": "^1.5.1",
+    "node-sass": "^4.11.0",
+    "react": "^16.8.2",
+    "react-dom": "^16.8.2",
+    "react-outside-click-handler": "^1.2.3",
+    "react-scripts": "2.1.5",
+    "superagent": "^4.1.0",
+    "textarea-caret": "^3.1.0",
+    "xregexp": "^4.2.4",
+    "yup": "^0.27.0"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": "react-app"
+  },
+  "browserslist": [
+    ">0.2%",
+    "not dead",
+    "not ie <= 11",
+    "not op_mini all"
+  ],
+  "proxy": "http://localhost:9999/"
+}
