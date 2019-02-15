@@ -18,11 +18,32 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
 	"github.com/minio/cli"
+	_ "github.com/minio/minsql/webui/assets"
+	"github.com/rakyll/statik/fs"
 )
+
+const (
+	apiRoutePrefix = "/api/"
+)
+
+// statikFS returns the handler for the Web UI serving static
+// file-server
+func statikFS() http.Handler {
+	statikFS, err := fs.New()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return http.FileServer(statikFS)
+}
+
+func registerWebUIRouter(router *mux.Router) {
+	router.Methods("GET").Path("/{index:.*}").Handler(statikFS())
+}
 
 func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 	client, err := newMinioAPI(ctx)
@@ -40,12 +61,15 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 	}
 
 	// API Router
-	apiRouter := router.PathPrefix("/").Subrouter()
+	apiRouter := router.PathPrefix(apiRoutePrefix).Subrouter()
 
 	bucketRouter := apiRouter.PathPrefix("/{bucket}").Subrouter()
 
 	// POST ingest API
 	bucketRouter.Methods("POST").Path("/{prefix:.+}").HandlerFunc(api.IngestHandler)
+
+	// Register web UI router.
+	registerWebUIRouter(router)
 
 	// Add future routes here.
 
