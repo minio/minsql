@@ -51,7 +51,7 @@ var globalFlags = []cli.Flag{
 
 // Help template for minsql.
 var minsqlHelpTemplate = `NAME:
-  {{.Name}} - {{.Usage}}
+  {{.Name}}
 
 DESCRIPTION:
   {{.Description}}
@@ -77,8 +77,7 @@ func newApp(name string) *cli.App {
 	app.Name = name
 	app.Author = "MinIO, Inc."
 	app.Version = Version
-	app.Usage = "Peta-scale stream processing"
-	app.Description = `MinSQL is a platform for peta-scale ingestion and processing of streaming data`
+	app.Description = `Distributed SQL based search engine for log data`
 	app.Flags = globalFlags
 	app.HideHelpCommand = true // Hide `help, h` command, we already have `minsql --help`.
 	app.CustomAppHelpTemplate = minsqlHelpTemplate

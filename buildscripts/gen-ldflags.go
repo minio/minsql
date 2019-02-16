@@ -1,7 +1,7 @@
 // +build ignore
 
 /*
- * Minio Cloud Storage, (C) 2015 Minio, Inc.
+ * MinSQL, (C) 2019 Minio, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,19 +28,19 @@ import (
 
 func genLDFlags(version string) string {
 	ldflagsStr := "-s -w"
-	ldflagsStr += " -X github.com/minsql/minsql/cmd.Version=" + version
-	ldflagsStr += " -X github.com/minsql/minsql/cmd.ReleaseTag=" + releaseTag(version)
-	ldflagsStr += " -X github.com/minsql/minsql/cmd.CommitID=" + commitID()
-	ldflagsStr += " -X github.com/minsql/minsql/cmd.ShortCommitID=" + commitID()[:12]
-	ldflagsStr += " -X github.com/minsql/minsql/cmd.GOPATH=" + os.Getenv("GOPATH")
-	ldflagsStr += " -X github.com/minsql/minsql/cmd.GOROOT=" + os.Getenv("GOROOT")
+	ldflagsStr += " -X github.com/minio/minsql/server.Version=" + version
+	ldflagsStr += " -X github.com/minio/minsql/server.ReleaseTag=" + releaseTag(version)
+	ldflagsStr += " -X github.com/minio/minsql/server.CommitID=" + commitID()
+	ldflagsStr += " -X github.com/minio/minsql/server.ShortCommitID=" + commitID()[:12]
+	ldflagsStr += " -X github.com/minio/minsql/server.GOPATH=" + os.Getenv("GOPATH")
+	ldflagsStr += " -X github.com/minio/minsql/server.GOROOT=" + os.Getenv("GOROOT")
 	return ldflagsStr
 }
 
 // genReleaseTag prints release tag to the console for easy git tagging.
 func releaseTag(version string) string {
 	relPrefix := "DEVELOPMENT"
-	if prefix := os.Getenv("MINIO_RELEASE"); prefix != "" {
+	if prefix := os.Getenv("MINSQL_RELEASE"); prefix != "" {
 		relPrefix = prefix
 	}
 
