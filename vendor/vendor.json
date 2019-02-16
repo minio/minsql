@@ -108,6 +108,12 @@
 			"revisionTime": "2019-01-27T04:21:35Z"
 		},
 		{
+			"checksumSHA1": "Pps01vZwszFzmTQixlqFizN/w14=",
+			"path": "github.com/rakyll/statik/fs",
+			"revision": "79258177a57a85a8ab2eca7ce0936aad80307f4e",
+			"revisionTime": "2018-11-28T13:56:55Z"
+		},
+		{
 			"checksumSHA1": "D8AVDI39CJ+jvw0HOotYU2gz54c=",
 			"origin": "github.com/minio/minio/vendor/github.com/rjeczalik/notify",
 			"path": "github.com/rjeczalik/notify",

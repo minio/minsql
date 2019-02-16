@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	apiRoutePrefix = "/api/"
+	apiRoutePrefix = "/api"
 )
 
 // statikFS returns the handler for the Web UI serving static
@@ -66,7 +66,16 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 	bucketRouter := apiRouter.PathPrefix("/{bucket}").Subrouter()
 
 	// POST ingest API
-	bucketRouter.Methods("POST").Path("/{prefix:.+}").HandlerFunc(api.IngestHandler)
+	bucketRouter.Methods("POST").
+		HeadersRegexp("Content-Type", "application/json*").
+		Queries("prefix", "{prefix:.*}").
+		HandlerFunc(api.IngestHandler)
+
+	// GET query API
+	bucketRouter.Methods("GET").
+		Queries("prefix", "{prefix:.*}").
+		Queries("sql", "{sql:.*}").
+		HandlerFunc(api.QueryHandler)
 
 	// Register web UI router.
 	registerWebUIRouter(router)
