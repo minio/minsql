@@ -1,0 +1,12 @@
+[servers]
+  [servers.alias]
+  endpoint_url = http(s)://<ip>:<port>
+  access_key = <access_key>
+  secret_key = <secret_key>
+
+[tables]
+  [tables.tablename]
+  server_alias = <aliasname>
+  bucket = <bucketname>
+  prefix = <prefixname>
+  output_record_delimiter = "\n"

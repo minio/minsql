@@ -17,66 +17,68 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
-	"path"
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
-	humanize "github.com/dustin/go-humanize"
 	"github.com/gorilla/mux"
 	minio "github.com/minio/minio-go"
+	xnet "github.com/minio/minio/pkg/net"
 )
 
 type apiHandlers struct {
-	client *minio.Client
+	sync.RWMutex
+	configClnt *minio.Client
+	config     *minSQLConfig
 }
 
-func (a apiHandlers) IngestHandler(w http.ResponseWriter, r *http.Request) {
+func (a *apiHandlers) IngestHandler(w http.ResponseWriter, r *http.Request) {
 	// Add authentication here once we finalize on which authentication
 	// style to use.
 
 	vars := mux.Vars(r)
-	bucketName := vars["bucket"]
-	prefixName := vars["prefix"] // optional
-
-	epoch := fmt.Sprintf("%x", time.Now().Unix())
-	for chunk := range Chunker(r.Body, 10*humanize.MiByte) {
-		if chunk.Err != nil {
-			http.Error(w, chunk.Err.Error(), http.StatusBadRequest)
-			return
-		}
-		objectName := path.Join(prefixName, epoch, fmt.Sprintf("%d.chunk", chunk.Index))
-		_, err := a.client.PutObject(bucketName, objectName, bytes.NewReader(chunk.Data), int64(len(chunk.Data)), minio.PutObjectOptions{})
-		if err != nil {
-			http.Error(w, chunk.Err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
+	_ = vars
 }
 
-// selectObject is to run query and writes the obtained output
-func (a apiHandlers) selectObject(wg *sync.WaitGroup, w http.ResponseWriter, bucket string, opts minio.SelectObjectOptions, objectCh chan string) {
-	select {
-	case object := <-objectCh:
-		defer wg.Done()
-		sresults, _ := a.client.SelectObjectContent(context.Background(), bucket, object, opts)
-		if sresults != nil {
-			defer sresults.Close()
-			io.Copy(w, sresults)
-			w.(http.Flusher).Flush()
+func (a *apiHandlers) watchMinSQLConfig() {
+	doneCh := make(chan struct{})
+	defer close(doneCh)
+
+	var events []string
+	events = append(events, string(minio.ObjectCreatedAll))
+	events = append(events, string(minio.ObjectRemovedAll))
+
+	nch := a.configClnt.ListenBucketNotification(defaultConfigBucket, defaultConfigFile, "", events, doneCh)
+	for n := range nch {
+		if n.Err != nil {
+			log.Println(n.Err)
+			return
+		}
+		var err error
+		for _, nrecord := range n.Records {
+			a.Lock()
+			if strings.HasPrefix(nrecord.EventName, "s3:ObjectCreated:") {
+				a.config, err = readMinSQLConfig(a.configClnt)
+			} else if strings.HasPrefix(nrecord.EventName, "s3:ObjectRemoved:") {
+				a.config, err = initMinSQLConfig(a.configClnt)
+			}
+			a.Unlock()
+			if err != nil {
+				log.Println(err)
+				return
+			}
 		}
 	}
 }
 
 // QueryHandler - run a query on an blob or a collection of blobs.
 //
-// GET /api/{bucket}?prefix={prefix}&sql={sql} HTTP/2.0
+// GET /api/sql={sql}&table={table} HTTP/2.0
 // Host: minsql:9999
 // Date: Mon, 3 Oct 2016 22:32:00 GMT
 //
@@ -86,18 +88,33 @@ func (a apiHandlers) selectObject(wg *sync.WaitGroup, w http.ResponseWriter, buc
 //
 // Examples:
 // ## Unauthorized
-// ~ curl http://minsql:9999/api/testbucket?prefix=jsons%2F&sql=select+s.key+from+s3object+s+where+s.size+%3E+1000
+// ~ curl http://minsql:9999/api/sql=select+s.key+from+s3object+s+where+s.size+%3E+1000&table=logdata
 //
 // ## Authorized
-// ~ curl -H "Authorization: auth" http://minsql:9999/api/testbucket?prefix=jsons%2F&sql=select+s.key+from+s3object+s+where+s.size+%3E+1000
-func (a apiHandlers) QueryHandler(w http.ResponseWriter, r *http.Request) {
+// ~ curl -H "Authorization: auth" http://minsql:9999/api/sql=select+s.key+from+s3object+s+where+s.size+%3E+1000&table=logdata
+func (a *apiHandlers) QueryHandler(w http.ResponseWriter, r *http.Request) {
 	// Add authentication here once we finalize on which authentication
 	// style to use.
 
 	vars := mux.Vars(r)
-	bucket := vars["bucket"]
-	prefix := vars["prefix"]
 	sql := vars["sql"]
+	table := vars["table"]
+
+	a.RLock()
+	tblInfo, ok := a.config.Tables[table]
+	a.RUnlock()
+	if !ok {
+		http.Error(w, fmt.Sprintf("%s table not found", table), http.StatusNotFound)
+		return
+	}
+
+	a.RLock()
+	sinfo, ok := a.config.Servers[tblInfo.Alias]
+	a.RUnlock()
+	if !ok {
+		http.Error(w, fmt.Sprintf("server alias %s not found for the table %s", tblInfo.Alias, table), http.StatusNotFound)
+		return
+	}
 
 	if sql == "" {
 		sql = "select * from s3object"
@@ -114,22 +131,45 @@ func (a apiHandlers) QueryHandler(w http.ResponseWriter, r *http.Request) {
 		},
 		OutputSerialization: minio.SelectObjectOutputSerialization{
 			JSON: &minio.JSONOutputOptions{
-				RecordDelimiter: "\n",
+				RecordDelimiter: tblInfo.OutputRecordDelimiter,
 			},
 		},
+	}
+
+	endpointURL, err := xnet.ParseURL(sinfo.EndpointURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	sclient, err := minio.NewV4(endpointURL.Host, sinfo.AccessKey, sinfo.SecretKey, endpointURL.Scheme == "https")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	var wg = &sync.WaitGroup{}
 	ch := make(chan string, runtime.NumCPU())
 	for i := 0; i < runtime.NumCPU(); i++ {
 		wg.Add(1)
-		go a.selectObject(wg, w, bucket, opts, ch)
+		go func() {
+			select {
+			case object := <-ch:
+				defer wg.Done()
+				sresults, _ := sclient.SelectObjectContent(context.Background(), tblInfo.Bucket, object, opts)
+				if sresults != nil {
+					defer sresults.Close()
+					io.Copy(w, sresults)
+					w.(http.Flusher).Flush()
+				}
+			}
+		}()
 	}
 
 	doneCh := make(chan struct{}, 1)
 	defer close(doneCh)
 
-	for obj := range a.client.ListObjects(bucket, prefix, true, doneCh) {
+	for obj := range sclient.ListObjects(tblInfo.Bucket, tblInfo.Prefix, true, doneCh) {
 		if obj.Size > 0 && !strings.HasSuffix(obj.Key, "/") {
 			ch <- obj.Key
 		}
