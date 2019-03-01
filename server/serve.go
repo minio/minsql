@@ -35,18 +35,6 @@ var globalFlags = []cli.Flag{
 		Value: ":" + minSQLDefaultPort,
 		Usage: "bind to a specific ADDRESS:PORT, ADDRESS can be an IP or hostname",
 	},
-	cli.StringFlag{
-		Name:  "minio-endpoint",
-		Usage: "minio endpoint of form http(s)://<hostname>:<port> to persist incoming data",
-	},
-	cli.StringFlag{
-		Name:  "minio-accesskey",
-		Usage: "minio endpoint access key",
-	},
-	cli.StringFlag{
-		Name:  "minio-secretkey",
-		Usage: "minio endpoint secret key",
-	},
 }
 
 // Help template for minsql.

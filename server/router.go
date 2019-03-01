@@ -22,9 +22,11 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
-	"github.com/minio/cli"
-	_ "github.com/minio/minsql/webui/assets"
 	"github.com/rakyll/statik/fs"
+
+	"github.com/minio/cli"
+	"github.com/minio/minio-go"
+	_ "github.com/minio/minsql/webui/assets"
 )
 
 const (
@@ -51,30 +53,44 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 		return nil, err
 	}
 
+	config, err := readMinSQLConfig(client)
+	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			config, err = initMinSQLConfig(client)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+
 	// Initialize router. `SkipClean(true)` stops gorilla/mux from
 	// normalizing URL path minio/minio#3256
 	router := mux.NewRouter().SkipClean(true)
 
 	// Initialize MinSQL API.
-	api := apiHandlers{
-		client: client,
+	api := &apiHandlers{
+		configClnt: client,
+		config:     config,
 	}
+
+	go api.watchMinSQLConfig()
 
 	// API Router
 	apiRouter := router.PathPrefix(apiRoutePrefix).Subrouter()
 
-	bucketRouter := apiRouter.PathPrefix("/{bucket}").Subrouter()
+	bucketRouter := apiRouter.PathPrefix("/").Subrouter()
 
 	// POST ingest API
 	bucketRouter.Methods("POST").
 		HeadersRegexp("Content-Type", "application/json*").
-		Queries("prefix", "{prefix:.*}").
 		HandlerFunc(api.IngestHandler)
 
 	// GET query API
 	bucketRouter.Methods("GET").
-		Queries("prefix", "{prefix:.*}").
 		Queries("sql", "{sql:.*}").
+		Queries("table", "{table:.*}").
 		HandlerFunc(api.QueryHandler)
 
 	// Register web UI router.

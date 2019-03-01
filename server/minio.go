@@ -19,15 +19,18 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net"
 	"net/http"
-	"net/url"
+	"os"
 	"time"
+
+	"golang.org/x/net/http2"
 
 	"github.com/minio/cli"
 	minio "github.com/minio/minio-go"
 	"github.com/minio/minio-go/pkg/credentials"
-	"golang.org/x/net/http2"
+	xnet "github.com/minio/minio/pkg/net"
 )
 
 func newCustomDialContext(timeout time.Duration) func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -43,16 +46,25 @@ func newCustomDialContext(timeout time.Duration) func(ctx context.Context, netwo
 }
 
 func newMinioAPI(ctx *cli.Context) (*minio.Client, error) {
-	minioEndpoint := ctx.GlobalString("minio-endpoint")
-	minioAccessKey := ctx.GlobalString("minio-accesskey")
-	minioSecretKey := ctx.GlobalString("minio-secretkey")
+	endpoint, ok := os.LookupEnv("MINIO_ENDPOINT")
+	if !ok {
+		return nil, errors.New("minio endpoint missing")
+	}
+	accessKey, ok := os.LookupEnv("MINIO_ACCESS_KEY")
+	if !ok {
+		return nil, errors.New("minio access key missing")
+	}
+	secretKey, ok := os.LookupEnv("MINIO_SECRET_KEY")
+	if !ok {
+		return nil, errors.New("minio secret key missing")
+	}
 
-	u, err := url.Parse(minioEndpoint)
+	u, err := xnet.ParseURL(endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	creds := credentials.NewStaticV4(minioAccessKey, minioSecretKey, "")
+	creds := credentials.NewStaticV4(accessKey, secretKey, "")
 
 	// By default enable HTTPs.
 	useTLS := true
