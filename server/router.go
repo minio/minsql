@@ -26,6 +26,8 @@ import (
 
 	"github.com/minio/cli"
 	"github.com/minio/minio-go"
+
+	// This is needed for webUI assets
 	_ "github.com/minio/minsql/webui/assets"
 )
 
@@ -106,5 +108,4 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 
 func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, fmt.Sprintf("Request %s path not recognized", r.URL), http.StatusMethodNotAllowed)
-	return
 }

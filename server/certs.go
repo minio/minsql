@@ -17,7 +17,6 @@
 package server
 
 import (
-	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/tls"
@@ -34,39 +33,6 @@ import (
 // to decrypt the TLS private key. It must be set if the TLS private key is
 // password protected.
 const TLSPrivateKeyPassword = "MINSQL_CERT_PASSWD"
-
-func parsePublicCertFile(certFile string) (x509Certs []*x509.Certificate, err error) {
-	// Read certificate file.
-	var data []byte
-	if data, err = ioutil.ReadFile(certFile); err != nil {
-		return nil, err
-	}
-
-	// Trimming leading and tailing white spaces.
-	data = bytes.TrimSpace(data)
-
-	// Parse all certs in the chain.
-	current := data
-	for len(current) > 0 {
-		var pemBlock *pem.Block
-		if pemBlock, current = pem.Decode(current); pemBlock == nil {
-			return nil, fmt.Errorf("Could not read PEM block from file %s", certFile)
-		}
-
-		var x509Cert *x509.Certificate
-		if x509Cert, err = x509.ParseCertificate(pemBlock.Bytes); err != nil {
-			return nil, err
-		}
-
-		x509Certs = append(x509Certs, x509Cert)
-	}
-
-	if len(x509Certs) == 0 {
-		return nil, fmt.Errorf("Empty public certificate file %s", certFile)
-	}
-
-	return x509Certs, nil
-}
 
 func getRootCAs(certsCAsDir string) (*x509.CertPool, error) {
 	rootCAs, _ := x509.SystemCertPool()
@@ -115,12 +81,12 @@ func loadX509KeyPair(certFile, keyFile string) (tls.Certificate, error) {
 	}
 	key, rest := pem.Decode(keyPEMBlock)
 	if len(rest) > 0 {
-		return tls.Certificate{}, errors.New("The private key contains additional data")
+		return tls.Certificate{}, errors.New("the private key contains additional data")
 	}
 	if x509.IsEncryptedPEMBlock(key) {
 		password, ok := os.LookupEnv(TLSPrivateKeyPassword)
 		if !ok {
-			return tls.Certificate{}, errors.New("No password set for TLS private key")
+			return tls.Certificate{}, errors.New("no password set for TLS private key")
 		}
 		decryptedKey, decErr := x509.DecryptPEMBlock(key, []byte(password))
 		if decErr != nil {
@@ -142,13 +108,4 @@ func loadX509KeyPair(certFile, keyFile string) (tls.Certificate, error) {
 		}
 	}
 	return cert, nil
-}
-
-// isFile - returns whether given path is a file or not.
-func isFile(path string) bool {
-	if fi, err := os.Stat(path); err == nil {
-		return fi.Mode().IsRegular()
-	}
-
-	return false
 }

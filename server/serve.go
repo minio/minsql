@@ -35,13 +35,15 @@ var globalFlags = []cli.Flag{
 		Value: ":" + minSQLDefaultPort,
 		Usage: "bind to a specific ADDRESS:PORT, ADDRESS can be an IP or hostname",
 	},
+	cli.StringFlag{
+		Name:  "certs-dir",
+		Value: defaultCertsDir.Get(),
+		Usage: "path to certs directory",
+	},
 }
 
 // Help template for minsql.
-var minsqlHelpTemplate = `NAME:
-  {{.Name}}
-
-DESCRIPTION:
+var minsqlHelpTemplate = `DESCRIPTION:
   {{.Description}}
 
 USAGE:
@@ -73,8 +75,14 @@ func newApp(name string) *cli.App {
 	httpServerErrorCh := make(chan error)
 	osSignalCh := make(chan os.Signal, 1)
 	app.Action = func(ctx *cli.Context) {
-		address := ctx.GlobalString("address")
+		var err error
+		globalCertsDir, err = newCertsDirFromCtx(ctx, "certs-dir", defaultCertsDir.Get)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		globalCertsCADir = &CertsDir{path: filepath.Join(globalCertsDir.Get(), certsCADir)}
 
+		address := ctx.GlobalString("address")
 		server, tlsCerts, err := newHTTPServer(address)
 		if err != nil {
 			log.Fatalln(err)

@@ -153,9 +153,9 @@ func (a *apiHandlers) QueryHandler(w http.ResponseWriter, r *http.Request) {
 	for i := 0; i < runtime.NumCPU(); i++ {
 		wg.Add(1)
 		go func() {
-			select {
-			case object := <-ch:
-				defer wg.Done()
+			defer wg.Done()
+			object, ok := <-ch
+			if ok {
 				sresults, _ := sclient.SelectObjectContent(context.Background(), tblInfo.Bucket, object, opts)
 				if sresults != nil {
 					defer sresults.Close()

@@ -17,9 +17,11 @@
 package server
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
+	"github.com/minio/cli"
 	homedir "github.com/mitchellh/go-homedir"
 )
 
@@ -90,4 +92,41 @@ func getPublicCertFile() string {
 
 func getPrivateKeyFile() string {
 	return filepath.Join(globalCertsDir.Get(), privateKeyFile)
+}
+
+func newCertsDirFromCtx(ctx *cli.Context, option string, getDefaultDir func() string) (*CertsDir, error) {
+	var dir string
+
+	switch {
+	case ctx.IsSet(option):
+		dir = ctx.String(option)
+	case ctx.GlobalIsSet(option):
+		dir = ctx.GlobalString(option)
+		// cli package does not expose parent's option option.  Below code is workaround.
+		if dir == "" || dir == getDefaultDir() {
+			if ctx.Parent().GlobalIsSet(option) {
+				dir = ctx.Parent().GlobalString(option)
+			}
+		}
+	default:
+		// Neither local nor global option is provided.  In this case, try to use
+		// default directory.
+		dir = getDefaultDir()
+	}
+
+	if dir == "" {
+		return nil, errors.New("empty directory")
+	}
+
+	// Disallow relative paths, figure out absolute paths.
+	dirAbs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = mkdirAllIgnorePerm(dirAbs); err != nil {
+		return nil, err
+	}
+
+	return &CertsDir{path: dirAbs}, nil
 }

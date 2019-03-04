@@ -51,7 +51,7 @@ func checkGoVersion(goVersionStr string) error {
 	}
 
 	if !constraint.Check(goVersion) {
-		return fmt.Errorf("Minio is not compiled by go %s. Minimum required version is %s, go %s release is known to have security issues. Please recompile accordingly", goVersionConstraint, minGoVersion, runtime.Version()[2:])
+		return fmt.Errorf("minsql is not compiled by go %s, minimum required version is %s. Please recompile accordingly", goVersionConstraint, minGoVersion)
 	}
 
 	return nil

@@ -83,7 +83,7 @@ func newMinioAPI(ctx *cli.Context) (*minio.Client, error) {
 		return nil, err
 	}
 
-	rootCAs, err := getRootCAs(defaultCertsCADir.Get())
+	rootCAs, err := getRootCAs(globalCertsCADir.Get())
 	if err != nil {
 		return nil, err
 	}
