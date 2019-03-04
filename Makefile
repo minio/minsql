@@ -9,8 +9,6 @@ all: build
 checks:
 	@echo "Checking dependencies"
 	@(env bash $(PWD)/buildscripts/checkdeps.sh)
-	@echo "Checking for project in GOPATH"
-	@(env bash $(PWD)/buildscripts/checkgopath.sh)
 
 getdeps:
 	@echo "Installing golint" && go get -u golang.org/x/lint/golint
@@ -21,22 +19,19 @@ verifiers: getdeps vet fmt lint staticcheck spelling
 
 vet:
 	@echo "Running $@"
-	@go vet github.com/minsql/minsql/...
+	@go vet ./...
 
 fmt:
 	@echo "Running $@"
-	@gofmt -d cmd/
-	@gofmt -d pkg/
+	@gofmt -d .
 
 lint:
 	@echo "Running $@"
-	@${GOPATH}/bin/golint -set_exit_status github.com/minsql/minsql/cmd/...
-	@${GOPATH}/bin/golint -set_exit_status github.com/minsql/minsql/pkg/...
+	@${GOPATH}/bin/golint -set_exit_status github.com/minio/minsql/...
 
 staticcheck:
 	@echo "Running $@"
-	@${GOPATH}/bin/staticcheck github.com/minsql/minsql/cmd/...
-	@${GOPATH}/bin/staticcheck github.com/minsql/minsql/pkg/...
+	@${GOPATH}/bin/staticcheck github.com/minio/minsql/...
 
 spelling:
 	@${GOPATH}/bin/misspell -locale US -error `find server/`
@@ -47,7 +42,7 @@ spelling:
 check: test
 test: verifiers build
 	@echo "Running unit tests"
-	@CGO_ENABLED=0 go test -tags kqueue ./...
+	@CGO_ENABLED=0 go test ./...
 
 coverage: build
 	@echo "Running all coverage for minsql"
@@ -56,7 +51,7 @@ coverage: build
 # Builds minsql locally.
 build: checks
 	@echo "Building minsql binary to './minsql'"
-	@GOFLAGS="" CGO_ENABLED=0 go build -tags kqueue --ldflags $(BUILD_LDFLAGS) -o $(PWD)/minsql
+	@GOFLAGS="" CGO_ENABLED=0 go build --ldflags $(BUILD_LDFLAGS) -o $(PWD)/minsql
 
 # Builds minsql and installs it to $GOPATH/bin.
 install: build
