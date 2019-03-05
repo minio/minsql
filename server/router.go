@@ -82,16 +82,14 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 	// API Router
 	apiRouter := router.PathPrefix(apiRoutePrefix).Subrouter()
 
-	bucketRouter := apiRouter.PathPrefix("/").Subrouter()
-
 	// POST ingest API
-	bucketRouter.Methods("POST").
+	apiRouter.Methods("POST").
 		HeadersRegexp("Content-Type", "application/json*").
 		HandlerFunc(api.IngestHandler)
 
 	// GET query API
-	bucketRouter.Methods("GET").
-		Queries("sql", "{sql:.*}").
+	apiRouter.Methods("POST").
+		HeadersRegexp("Content-Type", "multipart/form-data*").
 		HandlerFunc(api.QueryHandler)
 
 	// Register web UI router.
