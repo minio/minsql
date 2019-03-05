@@ -1,6 +1,6 @@
 import React, { Component } from "react"
-import classNames from "classnames"
 import api from "./api"
+import SqlInput from "./SqlInput"
 import Results from "./Results"
 
 class App extends Component {
@@ -10,21 +10,15 @@ class App extends Component {
       sql: "",
       error: "",
       results: [],
-      fetching: false
+      fetching: false,
+      banner: true
     }
-    this.onSubmit = this.onSubmit.bind(this)
-    this.onClear = this.onClear.bind(this)
+    this.submitQuery = this.submitQuery.bind(this)
   }
-  onSubmit(e) {
-    e.preventDefault()
-    const { sql } = this.state
-    if (!sql) {
-      this.setState({
-        error: "sql cannot be empty"
-      })
-      return
-    }
+  submitQuery(sql) {
     this.setState({
+      sql: sql,
+      banner: false,
       error: "",
       fetching: true
     })
@@ -37,65 +31,61 @@ class App extends Component {
             fetching: false
           })
         } else {
-          this.setState({ error: "There is no response", fetching: false })
+          this.setState({
+            results: [],
+            error: "There is no response",
+            fetching: false
+          })
         }
       })
-      .catch(err => this.setState({ error: err.toString(), fetching: false }))
-  }
-  onClear(e) {
-    e.preventDefault()
-    this.setState({
-      sql: "",
-      error: "",
-      results: []
-    })
+      .catch(err =>
+        this.setState({ results: [], error: err.toString(), fetching: false })
+      )
   }
   render() {
     return (
       <>
-        <section className="section">
-          <form onSubmit={this.onSubmit}>
-            <div className="field">
-              <label className="label">SQL Query</label>
-              <div className="control">
-                <textarea
-                  className="textarea"
-                  placeholder="Enter a SQL query"
-                  value={this.state.sql}
-                  onChange={e => this.setState({ sql: e.target.value })}
-                />
+        {this.state.banner && (
+          <section class="hero">
+            <div class="hero-body">
+              <div class="container">
+                <div className="query__banner">
+                  <h1 className="title">MinSQL</h1>
+                  <SqlInput submitQuery={this.submitQuery} />
+                </div>
               </div>
             </div>
-            <div className="field is-grouped">
-              <div className="control">
-                <button
-                  className={classNames({
-                    button: true,
-                    "is-primary": true,
-                    "is-loading": this.state.fetching
-                  })}
-                >
-                  Submit
-                </button>
-              </div>
-              <div className="control">
-                <button className="button is-text" onClick={this.onClear}>
-                  Clear
-                </button>
-              </div>
-            </div>
-          </form>
-        </section>
-        {this.state.error && (
-          <section className="section">
-            <div className="notification is-danger">{this.state.error}</div>
           </section>
         )}
-        <section className="section">
-          {this.state.results.length > 0 && (
-            <Results items={this.state.results} />
-          )}
-        </section>
+        {!this.state.banner && (
+          <>
+            <nav className="navbar is-spaced has-shadow is-fixed-top">
+              <div className="navbar-brand">
+                <a href="/" className="navbar-item">
+                  <h1 className="title">MinSQL</h1>
+                </a>
+              </div>
+              <div className="navbar-item">
+                <SqlInput sql={this.state.sql} submitQuery={this.submitQuery} />
+              </div>
+            </nav>
+            {this.state.fetching ? (
+              <div className="loading" />
+            ) : (
+              <section className="section is-medium">
+                {this.state.error && (
+                  <div className="notification is-danger">
+                    {this.state.error}
+                  </div>
+                )}
+
+                {this.state.results.length > 0 && (
+                  <Results items={this.state.results} />
+                )}
+              </section>
+            )}
+          </>
+        )}
       </>
     )
   }
