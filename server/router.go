@@ -31,10 +31,6 @@ import (
 	_ "github.com/minio/minsql/webui/assets"
 )
 
-const (
-	apiRoutePrefix = "/api"
-)
-
 // statikFS returns the handler for the Web UI serving static
 // file-server
 func statikFS() http.Handler {
@@ -48,6 +44,12 @@ func statikFS() http.Handler {
 func registerWebUIRouter(router *mux.Router) {
 	router.Methods("GET").Path("/{index:.*}").Handler(statikFS())
 }
+
+// API prefixes
+const (
+	logAPI    = "/log"
+	searchAPI = "/search"
+)
 
 func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 	client, err := newMinioAPI(ctx)
@@ -79,18 +81,17 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 
 	go api.watchMinSQLConfig()
 
-	// API Router
-	apiRouter := router.PathPrefix(apiRoutePrefix).Subrouter()
-
-	// POST ingest API
-	apiRouter.Methods("POST").
+	// POST log API
+	router.Methods("POST").
+		PathPrefix(logAPI).
 		HeadersRegexp("Content-Type", "application/json*").
-		HandlerFunc(api.IngestHandler)
+		HandlerFunc(api.LogIngestHandler)
 
 	// GET query API
-	apiRouter.Methods("POST").
-		HeadersRegexp("Content-Type", "multipart/form-data*").
-		HandlerFunc(api.QueryHandler)
+	router.Methods("POST").
+		PathPrefix(searchAPI).
+		HeadersRegexp("Content-Type", "application/x-www-form-urlencoded*").
+		HandlerFunc(api.SearchHandler)
 
 	// Register web UI router.
 	registerWebUIRouter(router)
@@ -98,7 +99,7 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 	// Add future routes here.
 
 	// If none of the routes match.
-	apiRouter.NotFoundHandler = http.HandlerFunc(notFoundHandler)
+	router.NotFoundHandler = http.HandlerFunc(notFoundHandler)
 
 	return router, nil
 }

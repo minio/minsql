@@ -1,12 +1,13 @@
 export class API {
   getQueryResults(sql) {
-    const url = `/api/`
+    const url = `/search`
     return new Promise((resolve, reject) => {
-      let formData = new FormData()
-      formData.append("sql", sql)
       fetch(url, {
         method: "POST",
-        body: formData
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: sql,
       })
         .then(res => {
           var decoder = new TextDecoder()

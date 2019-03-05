@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"runtime"
@@ -37,7 +38,7 @@ type apiHandlers struct {
 	config     *minSQLConfig
 }
 
-func (a *apiHandlers) IngestHandler(w http.ResponseWriter, r *http.Request) {
+func (a *apiHandlers) LogIngestHandler(w http.ResponseWriter, r *http.Request) {
 	// Add authentication here once we finalize on which authentication
 	// style to use.
 
@@ -76,26 +77,40 @@ func (a *apiHandlers) watchMinSQLConfig() {
 	}
 }
 
-// QueryHandler - run a query on an blob or a collection of blobs.
+// SearchHandler - run a query on an blob or a collection of blobs.
 //
-// GET /api/sql={sql} HTTP/2.0
+// POST /search HTTP/2.0
 // Host: minsql:9999
 // Date: Mon, 3 Oct 2016 22:32:00 GMT
+// Content-Type: application/x-www-form-urlencoded
+//
+// select s.key from json s where s.size > 1000
 //
 // HTTP/2.0 200 OK
 // ...
 //
 // Examples:
-// ## Use POST form to query the table
-// ~ curl http://minsql:9999/api -F 'sql=select s.key from tablename s where s.size > 1000'
+// ## Use POST form to search the table
+// ~ curl http://minsql:9999/search --data 'select s.key from tablename s where s.size > 1000'
 //
 // ## With Authorization
-// ~ curl -H "Authorization: auth"  http://minsql:9999/api -F 'sql=select s.key from tablename s where s.size > 1000'
-func (a *apiHandlers) QueryHandler(w http.ResponseWriter, r *http.Request) {
+// ~ curl -H "Authorization: auth" http://minsql:9999/search --data 'select s.key from tablename s where s.size > 1000'
+func (a *apiHandlers) SearchHandler(w http.ResponseWriter, r *http.Request) {
 	// Add authentication here once we finalize on which authentication
 	// style to use.
 
-	sql := r.PostFormValue("sql")
+	const maxFormSize = int64(10 << 20) // 10 MB is a lot of text.
+	sqlBytes, err := ioutil.ReadAll(io.LimitReader(r.Body, maxFormSize+1))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if int64(len(sqlBytes)) > maxFormSize {
+		http.Error(w, "http: POST too large", http.StatusBadRequest)
+		return
+	}
+
+	sql := string(sqlBytes)
 
 	table, err := GetTableName(sql)
 	if err != nil {
