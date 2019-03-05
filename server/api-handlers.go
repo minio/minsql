@@ -78,7 +78,7 @@ func (a *apiHandlers) watchMinSQLConfig() {
 
 // QueryHandler - run a query on an blob or a collection of blobs.
 //
-// GET /api/sql={sql}&table={table} HTTP/2.0
+// GET /api/sql={sql} HTTP/2.0
 // Host: minsql:9999
 // Date: Mon, 3 Oct 2016 22:32:00 GMT
 //
@@ -88,17 +88,22 @@ func (a *apiHandlers) watchMinSQLConfig() {
 //
 // Examples:
 // ## Unauthorized
-// ~ curl http://minsql:9999/api/sql=select+s.key+from+s3object+s+where+s.size+%3E+1000&table=logdata
+// ~ curl http://minsql:9999/api/sql=select+s.key+from+s3object+s+where+s.size+%3E+1000
 //
 // ## Authorized
-// ~ curl -H "Authorization: auth" http://minsql:9999/api/sql=select+s.key+from+s3object+s+where+s.size+%3E+1000&table=logdata
+// ~ curl -H "Authorization: auth" http://minsql:9999/api/sql=select+s.key+from+s3object+s+where+s.size+%3E+1000
 func (a *apiHandlers) QueryHandler(w http.ResponseWriter, r *http.Request) {
 	// Add authentication here once we finalize on which authentication
 	// style to use.
 
 	vars := mux.Vars(r)
 	sql := vars["sql"]
-	table := vars["table"]
+
+	table, err := GetTableName(sql)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	a.RLock()
 	tblInfo, ok := a.config.Tables[table]
@@ -116,13 +121,9 @@ func (a *apiHandlers) QueryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sql == "" {
-		sql = "select * from s3object"
-	}
-
 	// Initialize the default select options.
 	opts := minio.SelectObjectOptions{
-		Expression:     sql,
+		Expression:     strings.Replace(sql, fmt.Sprintf("from %s", table), "from s3object", -1),
 		ExpressionType: minio.QueryExpressionTypeSQL,
 		InputSerialization: minio.SelectObjectInputSerialization{
 			JSON: &minio.JSONInputOptions{

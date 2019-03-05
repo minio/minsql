@@ -7,7 +7,6 @@ class App extends Component {
   constructor(props) {
     super(props)
     this.state = {
-      table: "",
       sql: "",
       error: "",
       results: [],
@@ -18,10 +17,10 @@ class App extends Component {
   }
   onSubmit(e) {
     e.preventDefault()
-    const { table, sql } = this.state
-    if (!table) {
+    const { sql } = this.state
+    if (!sql) {
       this.setState({
-        error: "Table cannot be empty"
+        error: "sql cannot be empty"
       })
       return
     }
@@ -30,7 +29,7 @@ class App extends Component {
       fetching: true
     })
     api
-      .getQueryResults(sql, table)
+      .getQueryResults(sql)
       .then(res => {
         if (res && res.length > 0) {
           this.setState({
@@ -64,22 +63,6 @@ class App extends Component {
                   placeholder="Enter a SQL query"
                   value={this.state.sql}
                   onChange={e => this.setState({ sql: e.target.value })}
-                />
-              </div>
-            </div>
-            <div className="field">
-              <label className="label">Table</label>
-              <div className="control">
-                <input
-                  className="input"
-                  type="text"
-                  placeholder="Table"
-                  value={this.state.table}
-                  onChange={e =>
-                    this.setState({
-                      table: e.target.value
-                    })
-                  }
                 />
               </div>
             </div>

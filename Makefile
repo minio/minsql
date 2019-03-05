@@ -56,7 +56,7 @@ build: checks
 # Builds minsql and installs it to $GOPATH/bin.
 install: build
 	@echo "Installing minsql binary to '$(GOPATH)/bin/minsql'"
-	@mkdir -p $(GOPATH)/bin && cp -u $(PWD)/minsql $(GOPATH)/bin/minsql
+	@mkdir -p $(GOPATH)/bin && cp -uf $(PWD)/minsql $(GOPATH)/bin/minsql
 	@echo "Installation successful. To learn more, try \"minsql --help\"."
 
 clean:

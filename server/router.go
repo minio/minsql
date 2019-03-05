@@ -92,7 +92,6 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 	// GET query API
 	bucketRouter.Methods("GET").
 		Queries("sql", "{sql:.*}").
-		Queries("table", "{table:.*}").
 		HandlerFunc(api.QueryHandler)
 
 	// Register web UI router.
