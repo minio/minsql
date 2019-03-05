@@ -84,20 +84,18 @@ func (a *apiHandlers) watchMinSQLConfig() {
 //
 // HTTP/2.0 200 OK
 // ...
-// ...
 //
 // Examples:
-// ## Unauthorized
-// ~ curl http://minsql:9999/api/sql=select+s.key+from+s3object+s+where+s.size+%3E+1000
+// ## use query string directly
+// - curl http://minsql:9999/api -F 'sql=select s.key from s3object s where s.size > 1000'
 //
-// ## Authorized
-// ~ curl -H "Authorization: auth" http://minsql:9999/api/sql=select+s.key+from+s3object+s+where+s.size+%3E+1000
+// ## Authorize requests to minsql
+// ~ curl -H "Authorization: auth"  http://minsql:9999/api -F 'sql=select s.key from s3object s where s.size > 1000'
 func (a *apiHandlers) QueryHandler(w http.ResponseWriter, r *http.Request) {
 	// Add authentication here once we finalize on which authentication
 	// style to use.
 
-	vars := mux.Vars(r)
-	sql := vars["sql"]
+	sql := r.PostFormValue("sql")
 
 	table, err := GetTableName(sql)
 	if err != nil {
