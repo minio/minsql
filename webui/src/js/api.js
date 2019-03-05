@@ -5,7 +5,7 @@ export class API {
     const url = `/api/`
     return request
       .get(url)
-      .query({ sql: sql, table: table })
+      .query({ sql: sql })
       .then(res => res.body || res.text)
   }
 }
