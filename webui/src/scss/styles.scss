@@ -1,0 +1,17 @@
+@import "variables";
+@import "mixins";
+@import "misc";
+
+.query__banner {
+  margin: 0 auto;
+  max-width: 500px;
+}
+
+.query__banner .title {
+  text-align: center;
+}
+
+.query__input {
+  width: 500px;
+  font-size: 1.1rem;
+}
