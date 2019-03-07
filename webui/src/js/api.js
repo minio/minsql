@@ -5,22 +5,21 @@ export class API {
       fetch(url, {
         method: "POST",
         headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Type": "application/x-www-form-urlencoded"
         },
-        body: sql,
+        body: sql
       })
         .then(res => {
           var decoder = new TextDecoder()
           var reader = res.body.getReader()
           var data = []
           reader.read().then(function readData(result) {
-            const value = decoder.decode(result.value, { stream: true })
-
-            if (res.status && res.status !== 200) {
-              reject(value)
+            if (result.value === undefined) {
+              reject("There are no results")
               return
             }
 
+            const value = decoder.decode(result.value, { stream: true })
             const lines = value.split("\n")
             for (let line of lines) {
               try {

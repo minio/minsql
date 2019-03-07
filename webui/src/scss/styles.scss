@@ -15,3 +15,14 @@
   width: 500px;
   font-size: 1.1rem;
 }
+
+.progress__bar {
+  position: fixed;
+  bottom: 10;
+  right: 10px;
+  width: 500px;
+
+  .progress {
+    margin-top: 10px;
+  }
+}
