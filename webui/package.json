@@ -26,5 +26,5 @@
     "not ie <= 11",
     "not op_mini all"
   ],
-  "proxy": "http://localhost:9999/api/"
+  "proxy": "http://localhost:9999/"
 }
