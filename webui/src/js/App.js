@@ -80,7 +80,7 @@ class App extends Component {
                 )}
 
                 {this.state.results.length > 0 && (
-                  <Results items={this.state.results} />
+                  <Results items={this.state.results} sql={this.state.sql} />
                 )}
               </section>
             )}
