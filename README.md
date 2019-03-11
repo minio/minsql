@@ -45,16 +45,16 @@ version = 1
 [auth]
     [auth.NAME1]
         [auth.NAME1.temperature1]
-        token = TOKEN1
-        api = [search]
-        expire = TIME
-        status = enabled
+        token = "TOKEN1"
+        api = ["search"]
+        expire = "duration"
+        status = "enabled"
     [auth.NAME2]
         [auth.NAME2.temperature2]
-        token = TOKEN2
-        api = [search, log]
-        expire = TIME
-        status = disabled
+        token = "TOKEN2"
+        api = ["search", "log"]
+        expire = "duration"
+        status = "disabled"
 ```
 
 Upload the new config

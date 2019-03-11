@@ -1,12 +1,34 @@
-[servers]
-  [servers.alias]
-  endpoint_url = http(s)://<ip>:<port>
-  access_key = <access_key>
-  secret_key = <secret_key>
+version = "1"
 
-[tables]
-  [tables.tablename]
-  server_alias = <aliasname>
-  bucket = <bucketname>
-  prefix = <prefixname>
-  output_record_delimiter = "\n"
+[datastore]
+    [datastore.play]
+    endpoint = "https://play.minio.io:9000"
+    access_key = "Q3AM3UQ867SPQQA43P2F"
+    secret_key = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
+    bucket = "testbucket1"
+    prefix = ""
+
+    [datastore.myminio]
+    endpoint = "https://play.minio.io:9000"
+    access_key = "Q3AM3UQ867SPQQA43P2F"
+    secret_key = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
+    bucket = "testbucket2"
+    prefix = ""
+
+[table]
+    [table.temperature1]
+    datastores = ["play", "myminio"]
+
+[auth]
+    [auth.NAME1]
+        [auth.NAME1.temperature1]
+        token = "TOKEN1"
+        api = ["search"]
+        expire = "duration"
+        status = "enabled"
+    [auth.NAME2]
+        [auth.NAME2.temperature2]
+        token = "TOKEN2"
+        api = ["search", "log"]
+        expire = "duration"
+        status = "disabled"

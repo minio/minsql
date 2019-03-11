@@ -57,6 +57,9 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 		return nil, err
 	}
 
+	// Ignore the error for make bucket.
+	client.MakeBucket(defaultConfigBucket, "")
+
 	config, err := readMinSQLConfig(client)
 	if err != nil {
 		if minio.ToErrorResponse(err).Code == "NoSuchKey" {

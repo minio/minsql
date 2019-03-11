@@ -126,14 +126,6 @@ func (a *apiHandlers) SearchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.RLock()
-	sinfo, ok := a.config.Servers[tblInfo.Alias]
-	a.RUnlock()
-	if !ok {
-		http.Error(w, fmt.Sprintf("server alias %s not found for the table %s", tblInfo.Alias, table), http.StatusNotFound)
-		return
-	}
-
 	// Initialize the default select options.
 	opts := minio.SelectObjectOptions{
 		Expression:     strings.Replace(sql, fmt.Sprintf("from %s", table), "from s3object", -1),
@@ -150,27 +142,50 @@ func (a *apiHandlers) SearchHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	endpointURL, err := xnet.ParseURL(sinfo.EndpointURL)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	type dataStore struct {
+		client *minio.Client
+		bucket string
+		prefix string
 	}
+	var dsts []dataStore
 
-	sclient, err := minio.NewV4(endpointURL.Host, sinfo.AccessKey, sinfo.SecretKey, endpointURL.Scheme == "https")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	for _, datastore := range tblInfo.Datastores {
+		a.RLock()
+		sinfo, ok := a.config.Datastores[datastore]
+		if !ok {
+			http.Error(w, fmt.Sprintf("datastore %s not found for the table %s", datastore, table),
+				http.StatusNotFound)
+			return
+		}
+		a.RUnlock()
+		endpoint, err := xnet.ParseURL(sinfo.Endpoint)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		sclient, err := minio.NewV4(endpoint.Host, sinfo.AccessKey, sinfo.SecretKey, endpoint.Scheme == "https")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		dsts = append(dsts, dataStore{
+			client: sclient,
+			bucket: sinfo.Bucket,
+			prefix: sinfo.Prefix,
+		})
 	}
 
 	var wg = &sync.WaitGroup{}
-	ch := make(chan string, runtime.NumCPU())
+	ch := make(chan dataStore, runtime.NumCPU())
 	for i := 0; i < runtime.NumCPU(); i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			object, ok := <-ch
+			ds, ok := <-ch
 			if ok {
-				sresults, _ := sclient.SelectObjectContent(context.Background(), tblInfo.Bucket, object, opts)
+				sresults, _ := ds.client.SelectObjectContent(context.Background(), ds.bucket, ds.prefix, opts)
 				if sresults != nil {
 					defer sresults.Close()
 					io.Copy(w, sresults)
@@ -183,9 +198,15 @@ func (a *apiHandlers) SearchHandler(w http.ResponseWriter, r *http.Request) {
 	doneCh := make(chan struct{}, 1)
 	defer close(doneCh)
 
-	for obj := range sclient.ListObjects(tblInfo.Bucket, tblInfo.Prefix, true, doneCh) {
-		if obj.Size > 0 && !strings.HasSuffix(obj.Key, "/") {
-			ch <- obj.Key
+	for _, dst := range dsts {
+		for obj := range dst.client.ListObjects(dst.bucket, dst.prefix, true, doneCh) {
+			if obj.Size > 0 && !strings.HasSuffix(obj.Key, "/") {
+				ch <- dataStore{
+					client: dst.client,
+					bucket: dst.bucket,
+					prefix: obj.Key,
+				}
+			}
 		}
 	}
 

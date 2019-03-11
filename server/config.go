@@ -18,6 +18,7 @@ package server
 
 import (
 	"io"
+	"time"
 
 	"github.com/BurntSushi/toml"
 
@@ -27,30 +28,50 @@ import (
 const (
 	defaultConfigBucket = "config"
 	defaultConfigFile   = "config.toml"
+
+	configVersion = "1"
 )
 
 type minSQLConfig struct {
-	Servers map[string]serverInfo `toml:"servers"`
-	Tables  map[string]tableInfo  `toml:"tables"`
+	Version    string                         `toml:"version"`
+	Datastores map[string]dataStoreInfo       `toml:"datastore"`
+	Tables     map[string]tableInfo           `toml:"table"`
+	Auth       map[string]map[string]authInfo `toml:"auth"`
 }
 
-type serverInfo struct {
-	EndpointURL string `toml:"endpoint_url"`
-	AccessKey   string `toml:"access_key"`
-	SecretKey   string `toml:"secret_key"`
+type authStatus string
+
+const (
+	authEnabled  authStatus = "enabled"
+	authDisabled authStatus = "disabled"
+)
+
+type authInfo struct {
+	Token  string        `toml:"token"`
+	API    []string      `toml:"api"`
+	Expire time.Duration `toml:"expire"`
+	Status authStatus    `toml:"status"`
+}
+
+type dataStoreInfo struct {
+	Endpoint  string `toml:"endpoint"`
+	AccessKey string `toml:"access_key"`
+	SecretKey string `toml:"secret_key"`
+	Bucket    string `toml:"bucket"`
+	Prefix    string `toml:"prefix"`
 }
 
 type tableInfo struct {
-	Alias                 string `toml:"server_alias"`
-	Bucket                string `toml:"bucket"`
-	Prefix                string `toml:"prefix"`
-	OutputRecordDelimiter string `toml:"output_record_delimiter"`
+	Datastores            []string `toml:"datastores"`
+	OutputRecordDelimiter string   `toml:"output_record_delimiter"`
 }
 
 func initMinSQLConfig(client *minio.Client) (*minSQLConfig, error) {
 	config := &minSQLConfig{
-		Servers: make(map[string]serverInfo),
-		Tables:  make(map[string]tableInfo),
+		Version:    configVersion,
+		Datastores: make(map[string]dataStoreInfo),
+		Tables:     make(map[string]tableInfo),
+		Auth:       make(map[string]map[string]authInfo),
 	}
 
 	r, w := io.Pipe()
@@ -76,8 +97,9 @@ func readMinSQLConfig(client *minio.Client) (*minSQLConfig, error) {
 	}
 
 	config := &minSQLConfig{
-		Servers: make(map[string]serverInfo),
-		Tables:  make(map[string]tableInfo),
+		Datastores: make(map[string]dataStoreInfo),
+		Tables:     make(map[string]tableInfo),
+		Auth:       make(map[string]map[string]authInfo),
 	}
 
 	if _, err = toml.DecodeReader(configReader, config); err != nil {
