@@ -48,6 +48,11 @@ coverage: build
 	@echo "Running all coverage for minsql"
 	@(env bash $(PWD)/buildscripts/go-coverage.sh)
 
+dockerbuild:
+	@echo "Building minsql binary to './minsql'"
+	@docker build -t minio-builder -f Dockerfile.build .
+	@docker run -v $(PWD):/go/src/github.com/minio/minsql -w /go/src/github.com/minio/minsql minio-builder
+
 # Builds minsql locally.
 build: checks
 	@echo "Building minsql binary to './minsql'"

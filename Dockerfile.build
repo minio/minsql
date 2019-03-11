@@ -1,0 +1,4 @@
+FROM golang:1.12
+
+ENV GO111MODULE=on
+ENTRYPOINT ["go", "build", "github.com/minio/minsql"]
