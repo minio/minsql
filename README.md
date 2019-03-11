@@ -21,17 +21,40 @@ minsql
 ## Create a datastore
 Following example save it as `config.toml`
 ```toml
-[servers]
-  [servers.play]
-  endpoint_url = "https://play.minio.io:9000"
-  access_key = "Q3AM3UQ867SPQQA43P2F"
-  secret_key = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
-[tables]
-  [tables.json]
-  server_alias = "play"
-  bucket = "testbucket"
-  prefix = "jsons/"
-  output_record_delimiter = "\n"
+version = 1
+
+[datastore]
+    [datastore.play]
+    endpoint = "https://play.minio.io:9000"
+    access_key = "Q3AM3UQ867SPQQA43P2F"
+    secret_key = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
+    bucket = "testbucket1"
+    prefix = ""
+
+    [datastore.myminio]
+    endpoint = "https://play.minio.io:9000"
+    access_key = "Q3AM3UQ867SPQQA43P2F"
+    secret_key = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
+    bucket = "testbucket2"
+    prefix = ""
+
+[table]
+    [table.temperature1]
+    datastores = ["play", "myminio"]
+
+[auth]
+    [auth.NAME1]
+        [auth.NAME1.temperature1]
+        token = TOKEN1
+        api = [search]
+        expire = TIME
+        status = enabled
+    [auth.NAME2]
+        [auth.NAME2.temperature2]
+        token = TOKEN2
+        api = [search, log]
+        expire = TIME
+        status = disabled
 ```
 
 Upload the new config
@@ -41,7 +64,12 @@ mc cp config.toml play/config/config.toml
 
 > NOTE: There is no need to restart the MinSQL server, config will be reloaded automatically.
 
-## Send query
+## Search API
 ```
-curl http://localhost:9999/api/?sql=select+*+from+s3object&table=json
+curl http://localhost:9999/search/ --data "select * from json"
+```
+
+## Log API
+```
+curl http://localhost:9999/log/ --data @/tmp/log.json
 ```
