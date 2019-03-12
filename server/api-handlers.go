@@ -18,19 +18,37 @@ package server
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"math/rand"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
 
+	"github.com/bcicen/jstream"
 	"github.com/gorilla/mux"
 	minio "github.com/minio/minio-go"
 	xnet "github.com/minio/minio/pkg/net"
+
+	"github.com/skyrings/skyring-common/tools/uuid"
+	pfile "github.com/xitongsys/parquet-go/ParquetFile"
+	pwriter "github.com/xitongsys/parquet-go/ParquetWriter"
 )
+
+func mustGetUUID() string {
+	uuid, err := uuid.New()
+	if err != nil {
+		panic(err)
+	}
+
+	return uuid.String()
+}
 
 type apiHandlers struct {
 	sync.RWMutex
@@ -38,12 +56,240 @@ type apiHandlers struct {
 	config     *minSQLConfig
 }
 
+// Reader - JSON record reader for S3Select.
+type Reader struct {
+	decoder    *jstream.Decoder
+	valueCh    chan *jstream.MetaValue
+	readCloser io.ReadCloser
+}
+
+// Read - reads single record.
+func (r *Reader) Read() (jstream.KVS, error) {
+	v, ok := <-r.valueCh
+	if !ok {
+		if err := r.decoder.Err(); err != nil {
+			return nil, err
+		}
+		return nil, io.EOF
+	}
+
+	if v.ValueType != jstream.Object {
+		return nil, errors.New("unexpected json object")
+	}
+
+	// This is a JSON object type (that preserves key
+	// order)
+	return v.Value.(jstream.KVS), nil
+}
+
+// Close - closes underlaying reader.
+func (r *Reader) Close() error {
+	return r.readCloser.Close()
+}
+
+func toParquetType(value interface{}) string {
+	switch value.(type) {
+	case string:
+		return "UTF8, encoding=PLAIN_DICTIONARY"
+	case float32:
+		return "FLOAT"
+	case float64:
+		return "DOUBLE"
+	case int32:
+		return "INT32"
+	case int64:
+		return "INT64"
+	case bool:
+		return "BOOLEAN"
+	case []byte:
+		return "BYTE_ARRAY"
+	case []interface{}:
+		return "LIST"
+	case map[interface{}]interface{}:
+		return "MAP"
+	}
+	return "UNKNOWN"
+}
+
+func inferSchema(kvs jstream.KVS, table string) ([]byte, error) {
+	schemaKVS := jstream.KVS{}
+	schemaKVS = append(schemaKVS, jstream.KV{
+		Key:   "Tag",
+		Value: "name=" + table,
+	})
+
+	fieldsKV := jstream.KV{
+		Key: "Fields",
+	}
+
+	var fields []jstream.KVS
+	for _, kv := range kvs {
+		vtype := toParquetType(kv.Value)
+		if vtype != "UNKNOWN" {
+			fields = append(fields, jstream.KVS{
+				jstream.KV{
+					Key: "Tag",
+					Value: fmt.Sprintf("name=%s, type=%s",
+						kv.Key, vtype),
+				},
+			})
+		}
+	}
+	fieldsKV.Value = fields
+	schemaKVS = append(schemaKVS, fieldsKV)
+	return json.Marshal(schemaKVS)
+}
+
+func (a *apiHandlers) tblInfoToDataStores(tinfo tableInfo, table string) ([]dataStore, error) {
+	var dsts []dataStore
+	for _, datastore := range tinfo.Datastores {
+		a.RLock()
+		sinfo, ok := a.config.Datastores[datastore]
+		if !ok {
+			return nil, fmt.Errorf("datastore %s not found for the table %s", datastore, table)
+		}
+		a.RUnlock()
+		endpoint, err := xnet.ParseURL(sinfo.Endpoint)
+		if err != nil {
+			return nil, err
+		}
+
+		sclient, err := minio.NewV4(endpoint.Host, sinfo.AccessKey, sinfo.SecretKey, endpoint.Scheme == "https")
+		if err != nil {
+			return nil, err
+		}
+
+		dsts = append(dsts, dataStore{
+			client: sclient,
+			bucket: sinfo.Bucket,
+			prefix: sinfo.Prefix,
+		})
+	}
+	return dsts, nil
+}
+
+// LogIngestHandler - run a query on an blob or a collection of blobs.
+//
+// POST /log?table=tablename HTTP/2.0
+// Host: minsql:9999
+// Date: Mon, 3 Oct 2016 22:32:00 GMT
+//
+// {"status":"success","type":"folder","lastModified":"2019-03-11T17:58:55.197224468-07:00","size":220,"key":"objectname","etag":""}
+//
+//
+// HTTP/2.0 200 OK
+// ...
+//
+// Examples:
+// ## Use POST form to search the table
+// ~ curl http://minsql:9999/log?table=tablename --data @log.json
+//
+// ## With Authorization
+// ~ curl -H "Authorization: auth" http://minsql:9999/log?table=tablename --data @log.json
 func (a *apiHandlers) LogIngestHandler(w http.ResponseWriter, r *http.Request) {
 	// Add authentication here once we finalize on which authentication
 	// style to use.
-
 	vars := mux.Vars(r)
-	_ = vars
+	table := vars["table"]
+
+	a.RLock()
+	tblInfo, ok := a.config.Tables[table]
+	a.RUnlock()
+	if !ok {
+		http.Error(w, fmt.Sprintf("%s table not found", table), http.StatusNotFound)
+		return
+	}
+
+	d := jstream.NewDecoder(r.Body, 0).ObjectAsKVS()
+	jr := &Reader{
+		decoder:    d,
+		valueCh:    d.Stream(),
+		readCloser: r.Body,
+	}
+
+	kvs, err := jr.Read()
+	if err != nil && err != io.EOF {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// we reached EOF before schema inference, no data sent by client.
+	if err == io.EOF {
+		return
+	}
+
+	schemaBytes, err := inferSchema(kvs, table)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	dsts, err := a.tblInfoToDataStores(tblInfo, table)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var done bool
+	for !done {
+		if done {
+			return
+		}
+		fw, err := pfile.NewLocalFileWriter("stg.parquet")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer os.Remove("stg.parquet")
+		pw, err := pwriter.NewJSONWriter(string(schemaBytes), fw, 4)
+		if err != nil {
+			fw.Close()
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		count := 10000 // Write 10k records per parquet file.
+		for count > 0 {
+			var kvBytes []byte
+			kvBytes, err = json.Marshal(kvs)
+			if err != nil {
+				pw.WriteStop()
+				fw.Close()
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			if err = pw.Write(string(kvBytes)); err != nil {
+				pw.WriteStop()
+				fw.Close()
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			kvs, err = jr.Read()
+			if err != nil && err != io.EOF {
+				pw.WriteStop()
+				fw.Close()
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			if err == io.EOF {
+				done = true
+				break
+			}
+
+			count--
+		}
+
+		pw.WriteStop()
+		fw.Close()
+
+		name := strings.Replace(mustGetUUID(), "-", "/", -1) + ".parquet"
+		dst := dsts[rand.Intn(len(dsts))]
+		if _, err = dst.client.FPutObject(dst.bucket, name, "stg.parquet", minio.PutObjectOptions{}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 }
 
 func (a *apiHandlers) watchMinSQLConfig() {
@@ -75,6 +321,12 @@ func (a *apiHandlers) watchMinSQLConfig() {
 			}
 		}
 	}
+}
+
+type dataStore struct {
+	client *minio.Client
+	bucket string
+	prefix string
 }
 
 // SearchHandler - run a query on an blob or a collection of blobs.
@@ -131,50 +383,19 @@ func (a *apiHandlers) SearchHandler(w http.ResponseWriter, r *http.Request) {
 		Expression:     strings.Replace(sql, fmt.Sprintf("from %s", table), "from s3object", -1),
 		ExpressionType: minio.QueryExpressionTypeSQL,
 		InputSerialization: minio.SelectObjectInputSerialization{
-			JSON: &minio.JSONInputOptions{
-				Type: minio.JSONLinesType,
-			},
+			Parquet: &minio.ParquetInputOptions{},
 		},
 		OutputSerialization: minio.SelectObjectOutputSerialization{
 			JSON: &minio.JSONOutputOptions{
-				RecordDelimiter: tblInfo.OutputRecordDelimiter,
+				RecordDelimiter: "\n",
 			},
 		},
 	}
 
-	type dataStore struct {
-		client *minio.Client
-		bucket string
-		prefix string
-	}
-	var dsts []dataStore
-
-	for _, datastore := range tblInfo.Datastores {
-		a.RLock()
-		sinfo, ok := a.config.Datastores[datastore]
-		if !ok {
-			http.Error(w, fmt.Sprintf("datastore %s not found for the table %s", datastore, table),
-				http.StatusNotFound)
-			return
-		}
-		a.RUnlock()
-		endpoint, err := xnet.ParseURL(sinfo.Endpoint)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		sclient, err := minio.NewV4(endpoint.Host, sinfo.AccessKey, sinfo.SecretKey, endpoint.Scheme == "https")
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		dsts = append(dsts, dataStore{
-			client: sclient,
-			bucket: sinfo.Bucket,
-			prefix: sinfo.Prefix,
-		})
+	dsts, err := a.tblInfoToDataStores(tblInfo, table)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	var wg = &sync.WaitGroup{}
