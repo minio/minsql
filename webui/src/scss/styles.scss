@@ -1,28 +1,48 @@
 @import "variables";
 @import "mixins";
 @import "misc";
+@import "bulma";
 
 .query__banner {
   margin: 0 auto;
-  max-width: 500px;
+  max-width: 600px;
 }
 
 .query__banner .title {
   text-align: center;
 }
 
+.query__form {
+  flex: 1 1;
+  min-width: 500px;
+}
+
 .query__input {
-  width: 500px;
+  width: 100%;
   font-size: 1.1rem;
+}
+
+.query__banner .query__input {
+  box-shadow: rgba(0, 0, 0, 0.2) 0px 0px 0px 1px, rgba(0, 0, 0, 0.2) 0px 2px 4px;
+  border-color: transparent;
+}
+
+.navbar-item .has-icons-right .icon.is-right {
+  right: 5px;
+  top: 1px;
 }
 
 .progress__bar {
   position: fixed;
-  bottom: 10;
+  bottom: 10px;
   right: 10px;
   width: 500px;
 
   .progress {
     margin-top: 10px;
   }
+}
+
+.results {
+  margin-top: 50px;
 }

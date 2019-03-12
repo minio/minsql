@@ -34,7 +34,7 @@ export const Results = ({ items, sql }) => {
   const keys = Object.keys(items[0])
   return (
     <>
-      <div className="notification">
+      <div className="box">
         {items.length > 50 && <span>Showing top 50 results, </span>}
         <a href="#download" onClick={downloadResults}>
           Click here
@@ -43,7 +43,7 @@ export const Results = ({ items, sql }) => {
         {downloading && <Progress size={size} />}
       </div>
 
-      <table className="table is-fullwidth">
+      <table className="table is-fullwidth is-hoverable">
         <thead>
           <tr>
             {keys.map(k => (

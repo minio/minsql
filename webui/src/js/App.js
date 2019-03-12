@@ -46,12 +46,15 @@ class App extends Component {
     return (
       <>
         {this.state.banner && (
-          <section class="hero">
-            <div class="hero-body">
-              <div class="container">
+          <section className="hero is-fullheight-with-navbar">
+            <div className="hero-body">
+              <div className="container">
                 <div className="query__banner">
                   <h1 className="title">MinSQL</h1>
-                  <SqlInput submitQuery={this.submitQuery} />
+                  <SqlInput
+                    submitQuery={this.submitQuery}
+                    isBanner={this.state.banner}
+                  />
                 </div>
               </div>
             </div>
@@ -59,7 +62,7 @@ class App extends Component {
         )}
         {!this.state.banner && (
           <>
-            <nav className="navbar is-spaced has-shadow is-fixed-top">
+            <nav className="navbar has-shadow is-fixed-top">
               <div className="navbar-brand">
                 <a href="/" className="navbar-item">
                   <h1 className="title">MinSQL</h1>
@@ -72,7 +75,7 @@ class App extends Component {
             {this.state.fetching ? (
               <div className="loading" />
             ) : (
-              <section className="section is-medium">
+              <section className="section results">
                 {this.state.error && (
                   <div className="notification is-danger">
                     {this.state.error}
