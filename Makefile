@@ -42,7 +42,7 @@ spelling:
 check: test
 test: verifiers build
 	@echo "Running unit tests"
-	@CGO_ENABLED=0 go test ./...
+	@GO111MODULE=on CGO_ENABLED=0 go test ./...
 
 coverage: build
 	@echo "Running all coverage for minsql"
@@ -56,7 +56,7 @@ dockerbuild:
 # Builds minsql locally.
 build: checks
 	@echo "Building minsql binary to './minsql'"
-	@GOFLAGS="" CGO_ENABLED=0 go build --ldflags $(BUILD_LDFLAGS) -o $(PWD)/minsql
+	@GO111MODULE=on GOFLAGS="" CGO_ENABLED=0 go build --ldflags $(BUILD_LDFLAGS) -o $(PWD)/minsql
 
 # Builds minsql and installs it to $GOPATH/bin.
 install: build
@@ -70,4 +70,3 @@ clean:
 	@find . -name '*~' | xargs rm -fv
 	@rm -rvf minsql
 	@rm -rvf build
-	@rm -rvf release

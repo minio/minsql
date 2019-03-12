@@ -66,10 +66,10 @@ mc cp config.toml play/config/config.toml
 
 ## Search API
 ```
-curl http://localhost:9999/search/ --data "select * from json"
+curl http://minsql:9999/search --data 'select s.key from tablename s where s.size > 1000'
 ```
 
 ## Log API
 ```
-curl http://localhost:9999/log/ --data @/tmp/log.json
+curl http://minsql:9999/log?table=tablename --data @log.json
 ```
