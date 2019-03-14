@@ -87,7 +87,7 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 	// POST log API
 	router.Methods("POST").
 		PathPrefix(logAPI).
-		Queries("table", "{table:.*}").
+		Path("/{table:.+}").
 		HandlerFunc(api.LogIngestHandler)
 
 	// GET query API

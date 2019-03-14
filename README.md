@@ -71,5 +71,5 @@ curl http://minsql:9999/search --data 'select s.key from tablename s where s.siz
 
 ## Log API
 ```
-curl http://minsql:9999/log?table=tablename --data @log.json
+curl http://minsql:9999/log/tablename --data @log.json
 ```

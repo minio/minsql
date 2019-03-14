@@ -27,6 +27,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -168,9 +169,13 @@ func (a *apiHandlers) tblInfoToDataStores(tinfo tableInfo, table string) ([]data
 	return dsts, nil
 }
 
+var (
+	validTable = regexp.MustCompile("^[a-zA-Z][a-zA-Z0-9-_]+$")
+)
+
 // LogIngestHandler - run a query on an blob or a collection of blobs.
 //
-// POST /log?table=tablename HTTP/2.0
+// POST /log/{tablename} HTTP/2.0
 // Host: minsql:9999
 // Date: Mon, 3 Oct 2016 22:32:00 GMT
 //
@@ -182,15 +187,20 @@ func (a *apiHandlers) tblInfoToDataStores(tinfo tableInfo, table string) ([]data
 //
 // Examples:
 // ## Use POST form to search the table
-// ~ curl http://minsql:9999/log?table=tablename --data @log.json
+// ~ curl http://minsql:9999/log/{tablename} --data @log.json
 //
 // ## With Authorization
-// ~ curl -H "Authorization: auth" http://minsql:9999/log?table=tablename --data @log.json
+// ~ curl -H "Authorization: auth" http://minsql:9999/log/{tablename} --data @log.json
 func (a *apiHandlers) LogIngestHandler(w http.ResponseWriter, r *http.Request) {
 	// Add authentication here once we finalize on which authentication
 	// style to use.
 	vars := mux.Vars(r)
 	table := vars["table"]
+
+	if !validTable.MatchString(table) {
+		http.Error(w, fmt.Sprintf("%s table name is invalid", table), http.StatusBadRequest)
+		return
+	}
 
 	a.RLock()
 	tblInfo, ok := a.config.Tables[table]
@@ -369,6 +379,10 @@ func (a *apiHandlers) SearchHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if !validTable.MatchString(table) {
+		http.Error(w, fmt.Sprintf("%s table name invalid", table), http.StatusBadRequest)
+		return
+	}
 
 	a.RLock()
 	tblInfo, ok := a.config.Tables[table]
@@ -408,9 +422,9 @@ func (a *apiHandlers) SearchHandler(w http.ResponseWriter, r *http.Request) {
 			if ok {
 				sresults, _ := ds.client.SelectObjectContent(context.Background(), ds.bucket, ds.prefix, opts)
 				if sresults != nil {
-					defer sresults.Close()
 					io.Copy(w, sresults)
 					w.(http.Flusher).Flush()
+					sresults.Close()
 				}
 			}
 		}()

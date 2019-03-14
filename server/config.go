@@ -17,6 +17,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -106,5 +107,10 @@ func readMinSQLConfig(client *minio.Client) (*minSQLConfig, error) {
 		return nil, err
 	}
 
+	for table := range config.Tables {
+		if !validTable.MatchString(table) {
+			return nil, fmt.Errorf("%s table name invalid, should have alphanumeric characters such as [helloWorld0, hello_World0, ...]", table)
+		}
+	}
 	return config, nil
 }
