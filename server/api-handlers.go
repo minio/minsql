@@ -27,10 +27,12 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"path"
 	"regexp"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bcicen/jstream"
 	"github.com/gorilla/mux"
@@ -173,6 +175,24 @@ var (
 	validTable = regexp.MustCompile("^[a-zA-Z][a-zA-Z0-9-_]+$")
 )
 
+func shuffle(dsts []dataStore) []dataStore {
+	// Seed random based on current time.
+	rand.Seed(time.Now().Unix())
+
+	// We start at the end of the slice, inserting our random
+	// values one at a time.
+	for n := len(dsts); n > 0; n-- {
+		randIndex := rand.Intn(n)
+		// We swap the value at index n-1 and the random index
+		// to move our randomly chosen value to the end of the
+		// slice, and to move the value that was at n-1 into our
+		// unshuffled portion of the slice.
+		dsts[n-1], dsts[randIndex] = dsts[randIndex], dsts[n-1]
+	}
+
+	return dsts
+}
+
 // LogIngestHandler - run a query on an blob or a collection of blobs.
 //
 // POST /log/{tablename} HTTP/2.0
@@ -239,6 +259,10 @@ func (a *apiHandlers) LogIngestHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	uuid := mustGetUUID()
+	parquetTable := table + ".parquet"
+	i := 0
+
 	var done bool
 	for !done {
 		if done {
@@ -256,7 +280,7 @@ func (a *apiHandlers) LogIngestHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		count := 10000 // Write 10k records per parquet file.
+		count := 100000 // Write 100k records per parquet file.
 		for count > 0 {
 			var kvBytes []byte
 			kvBytes, err = json.Marshal(kvs)
@@ -293,12 +317,14 @@ func (a *apiHandlers) LogIngestHandler(w http.ResponseWriter, r *http.Request) {
 		pw.WriteStop()
 		fw.Close()
 
-		name := strings.Replace(mustGetUUID(), "-", "/", -1) + ".parquet"
-		dst := dsts[rand.Intn(len(dsts))]
+		dst := shuffle(dsts)[0]
+		name := path.Join(dst.prefix, parquetTable, fmt.Sprintf("part-%d-%s-c000.snappy.parquet", i, uuid))
 		if _, err = dst.client.FPutObject(dst.bucket, name, "stg.parquet", minio.PutObjectOptions{}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
+		i++
 	}
 }
 
@@ -434,7 +460,7 @@ func (a *apiHandlers) SearchHandler(w http.ResponseWriter, r *http.Request) {
 	defer close(doneCh)
 
 	for _, dst := range dsts {
-		for obj := range dst.client.ListObjects(dst.bucket, dst.prefix, true, doneCh) {
+		for obj := range dst.client.ListObjects(dst.bucket, path.Join(dst.prefix, table), true, doneCh) {
 			if obj.Size > 0 && !strings.HasSuffix(obj.Key, "/") {
 				ch <- dataStore{
 					client: dst.client,
