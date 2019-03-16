@@ -193,6 +193,8 @@ func shuffle(dsts []dataStore) []dataStore {
 	return dsts
 }
 
+const timeFormat = "2006/Jan/02/15-04-05"
+
 // LogIngestHandler - run a query on an blob or a collection of blobs.
 //
 // POST /log/{tablename} HTTP/2.0
@@ -261,7 +263,6 @@ func (a *apiHandlers) LogIngestHandler(w http.ResponseWriter, r *http.Request) {
 
 	uuid := mustGetUUID()
 	parquetTable := table + ".parquet"
-	i := 0
 
 	var done bool
 	for !done {
@@ -318,13 +319,13 @@ func (a *apiHandlers) LogIngestHandler(w http.ResponseWriter, r *http.Request) {
 		fw.Close()
 
 		dst := shuffle(dsts)[0]
-		name := path.Join(dst.prefix, parquetTable, fmt.Sprintf("part-%d-%s-c000.snappy.parquet", i, uuid))
+		name := path.Join(dst.prefix, parquetTable,
+			time.Now().UTC().Format(timeFormat),
+			fmt.Sprintf("%s.snappy.parquet", uuid))
 		if _, err = dst.client.FPutObject(dst.bucket, name, "stg.parquet", minio.PutObjectOptions{}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-
-		i++
 	}
 }
 
