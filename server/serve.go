@@ -94,7 +94,11 @@ func newApp(name string) *cli.App {
 		}
 
 		go func() {
-			httpServerErrorCh <- server.ListenAndServe()
+			if tlsCerts != nil {
+				httpServerErrorCh <- server.ListenAndServeTLS("", "")
+			} else {
+				httpServerErrorCh <- server.ListenAndServe()
+			}
 		}()
 
 		signal.Notify(osSignalCh, os.Interrupt, syscall.SIGTERM)
