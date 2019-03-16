@@ -4,18 +4,18 @@ Massively parallel log search engine with a simple HTTP API. For usage instructi
 
 MinSQL ingests and searches petabytes of data distributed across MinIO buckets. MinSQL relies on the high speed data access capabilities of MinIO Object Storage and effieciency of the parquet data format to achieve massive scale.
 
-Each data unit in MinSQL is a JSON document. There are no restrictions on the schema of these documents.  
+Each data unit in MinSQL is a JSON document. There are no restrictions on the schema of these documents.
 
 ## Features
 
-- [x] Petascale 
+- [x] Petascale
 - [x] Ingest
 - [x] Search
-- [x] Shared Nothing 
+- [x] Shared Nothing
 
 ## Architecture
 
-![Architecture](./minsql_architecture.png) 
+![Architecture](./architecture.png)
 
 # Usage
 
