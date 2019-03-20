@@ -47,15 +47,15 @@ export const Results = ({ items, sql }) => {
         <thead>
           <tr>
             {keys.map(k => (
-              <th>{k}</th>
+              <th key={k}>{k}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {items.slice(0, 50).map(i => (
-            <tr>
+          {items.slice(0, 50).map((r, index) => (
+            <tr key={index}>
               {keys.map(k => (
-                <td>{i[k]}</td>
+                <td key={k}>{r[k]}</td>
               ))}
             </tr>
           ))}

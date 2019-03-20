@@ -35,16 +35,16 @@ export const SqlInput = ({ sql: initSql, submitQuery, isBanner }) => {
           />
           <span className="icon is-right">
             <svg
-              class="feather feather-search sc-dnqmqq cUQkap"
+              className="feather feather-search sc-dnqmqq cUQkap"
               xmlns="http://www.w3.org/2000/svg"
               width="24"
               height="24"
               viewBox="0 0 24 24"
               fill="none"
               stroke="#dbdbdb"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
               aria-hidden="true"
               data-reactid="30"
             >
