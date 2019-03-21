@@ -6,7 +6,7 @@ MinSQL stores data in Columnar-Parquet format ordered by time. It is built on to
 
 ## What is a log database?
 
-Log database is a type of database that is optimized for ingesting JSON data records (log lines, events, messages etc.) at massive scales with SQL-like search/query capabilities. 
+Log database is a type of database that is optimized for ingesting JSON data records (log lines, events, messages etc.) at massive scales with SQL-like search/query capabilities.
 
 ## Features
 
@@ -29,7 +29,7 @@ MinSQL does **NOT** try to be
 - A Relational database
 - A Search engine for non-log data
 - A Message Queue
-- A Transactional database with write guarantees 
+- A Transactional database with write guarantees
 - A Database with `Join`, `GroupBy` or `ACID` guarantees
 
 ## Architecture
@@ -44,22 +44,22 @@ $ go get -d github.com/minio/minsql
 $ cd $GOPATH/src/github.com/minio/minsql
 $ make dockerbuild
 $ ./minsql --help
-Distributed SQL based search engine for log data                                                                                                                                                                                      
-                                                                                                                                                                                                                                      
-MinSQL DEVELOPMENT.GOGET by MinIO Inc.                                                                                                                                                                                                
-                                                                                                                                                                                                                                      
-Usage:                                                                                                                                                                                                                                
-  minsql                                                                                                                                                                                                                              
-                                                                                                                                                                                                                                      
-Environment:                                                                                                                                                                                                                          
-  MINIO_ENDPOINT    SCHEME://ADDRESS:PORT of the minio endpoint                                                                                                                                                                       
-  MINIO_ACCESS_KEY  Access key for the minio endpoint                                                                                                                                                                                 
-  MINIO_SECRET_KEY  Secret key for the minio endpoint                                                                                                                                                                                 
-                                                                                                                                                                                                                                      
-Flags:                                                                                                                                                                                                                                
-      --address string     bind to a specific ADDRESS:PORT, ADDRESS can be an IP or hostname (default ":9999")                                                                                                                        
-      --certs-dir string   path to certs directory                                                                                                                                                                                    
-  -h, --help               help for minsql                                                                                                                                                                                            
+Distributed SQL based search engine for log data
+
+MinSQL DEVELOPMENT.GOGET by MinIO Inc.
+
+Usage:
+  minsql
+
+Environment:
+  MINIO_ENDPOINT    SCHEME://ADDRESS:PORT of the minio endpoint
+  MINIO_ACCESS_KEY  Access key for the minio endpoint
+  MINIO_SECRET_KEY  Secret key for the minio endpoint
+
+Flags:
+      --address string     bind to a specific ADDRESS:PORT, ADDRESS can be an IP or hostname (default ":9999")
+      --certs-dir string   path to certs directory
+  -h, --help               help for minsql
       --version            version for minsql
 ```
 
@@ -72,7 +72,7 @@ The setup requires two steps
 
 ### Step 1: Configuring MinSQL
 
-Export the following environment variable to configure 
+Export the following environment variable to configure
 
 - MinIO endpoint - the address at which MinIO server is running
 - MinIO access key - the access key for the MinIO server
@@ -93,11 +93,11 @@ $ ./minsql
 
 ### Step 2: Configuring MinIO
 
-MinSQL can search and ingest logs across MinIO clusters and buckets. Each one of these `datastores` map 
-tables to buckets. The configuration needs to be provided to the MinIO backend that was configured via environment 
+MinSQL can search and ingest logs across MinIO clusters and buckets. Each one of these `datastores` map
+tables to buckets. The configuration needs to be provided to the MinIO backend that was configured via environment
 variables in Step 1.
 
-The configuration format (in TOML) is laid out below with an example 
+The configuration format (in TOML) is laid out below with an example
 
 ```toml
 version = 1
@@ -191,7 +191,7 @@ The config can be updated in MinIO backend at anypoint while MinSQL is in operat
 
 This can be used for adding or disabling authorization tokens, adding new tables or changing table information.
 
-Now you are all set to start using MinSQL to ingest and search log data. 
+Now you are all set to start using MinSQL to ingest and search log data.
 
 ## Ingesting data
 
@@ -199,16 +199,16 @@ The ingestion API is also called the `log` API. We will use these two terms inte
 
 ```sh
 POST /log/{table}
---- 
+---
 # BODY - Stream of JSON documents
 {"key": "value", "data": "data"}
 ["value1", "value2"]
 ...
-``` 
+```
 
-The `{table}` path parameter should have a table from the above defined configuration. If it doesnt, then it fails silently. This is an intentional design decision, since we allow dynamic updates of tables in real time, and at massive scales, small loss of data can be toleratored, but small failures can lead to a an unrecoverable backlog situation. 
+The `{table}` path parameter should have a table from the above defined configuration. If it doesnt, then it fails silently. This is an intentional design decision, since we allow dynamic updates of tables in real time, and at massive scales, small loss of data can be toleratored, but small failures can lead to a an unrecoverable backlog situation.
 
-The body of the POST request should be a stream of JSON documents, any other data format will be ignored. 
+The body of the POST request should be a stream of JSON documents, any other data format will be ignored.
 
 ```sh
 curl http://minsql:9999/log/tablename --data @log.json
@@ -220,16 +220,15 @@ The search API is a HTTP POST endpoint with the following signature
 
 ```sh
 POST /search
---- 
+---
 # Body - SQL like Select syntax
 select s.data from tablename s where s.key=value
 ```
 
 The syntax for querying is described [here](https://docs.aws.amazon.com/AmazonS3/latest/dev/s3-glacier-select-sql-reference-select.html)
 
-There is one difference between standard S3 syntax and MinSQL syntax. In S3 syntax, the tablename is s3Object. In MinSQL, we use the tablename configured in the configuration. 
+There is one difference between standard S3 syntax and MinSQL syntax. In S3 syntax, the tablename is s3Object. In MinSQL, we use the tablename configured in the configuration.
 
 ```sh
 curl http://minsql:9999/search --data 'select s.key from tablename s where s.size > 1000'
 ```
-
