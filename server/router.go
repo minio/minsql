@@ -48,8 +48,13 @@ func registerWebUIRouter(router *mux.Router) {
 // API prefixes
 const (
 	logAPI    = "/log"
-	listAPI   = "/list"
 	searchAPI = "/search"
+
+	listDataStoresAPI = "/listDataStores"
+	createDataStore   = "/createDataStore"
+
+	listTablesAPI = "/listTables"
+	createTable   = "/createTable"
 )
 
 func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
@@ -85,22 +90,38 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 
 	go api.watchMinSQLConfig()
 
-	// Log ingestion API
+	// Log ingestion
 	router.Methods(http.MethodPost).
 		PathPrefix(logAPI).
 		Path("/{table:.+}").
 		HandlerFunc(api.LogIngestHandler)
 
-	// List tables API
-	router.Methods(http.MethodGet).
-		PathPrefix(listAPI).
-		HandlerFunc(api.ListTablesHandler)
-
-	// Search query API
+	// Search query
 	router.Methods(http.MethodPost).
 		PathPrefix(searchAPI).
 		HeadersRegexp("Content-Type", "application/x-www-form-urlencoded*").
 		HandlerFunc(api.SearchHandler)
+
+	// List configured datastores
+	router.Methods(http.MethodGet).
+		PathPrefix(listDataStoresAPI).
+		HandlerFunc(api.ListDataStoresHandler)
+
+	// Create new data store
+	router.Methods(http.MethodPost).
+		PathPrefix(createDataStore).
+		HeadersRegexp("Content-Type", "application/x-www-form-urlencoded*").
+		HandlerFunc(api.CreateDataStoreHandler)
+
+	// List configured tables
+	router.Methods(http.MethodGet).
+		PathPrefix(listTablesAPI).
+		HandlerFunc(api.ListTablesHandler)
+
+	router.Methods(http.MethodPost).
+		PathPrefix(createTable).
+		HeadersRegexp("Content-Type", "application/x-www-form-urlencoded*").
+		HandlerFunc(api.CreateTableHandler)
 
 	// Register web UI router.
 	registerWebUIRouter(router)

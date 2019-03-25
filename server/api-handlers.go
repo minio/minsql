@@ -34,14 +34,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/bcicen/jstream"
+	"github.com/dustin/go-humanize"
 	"github.com/gorilla/mux"
-	minio "github.com/minio/minio-go"
-	xnet "github.com/minio/minio/pkg/net"
-
 	"github.com/skyrings/skyring-common/tools/uuid"
 	pfile "github.com/xitongsys/parquet-go/ParquetFile"
 	pwriter "github.com/xitongsys/parquet-go/ParquetWriter"
+
+	minio "github.com/minio/minio-go"
+	xnet "github.com/minio/minio/pkg/net"
 )
 
 func mustGetUUID() string {
@@ -195,7 +197,7 @@ func shuffle(dsts []dataStore) []dataStore {
 
 // ListTablesHandler - list all configured tables
 //
-// GET /list HTTP/2.0
+// GET /listTables HTTP/2.0
 // Host: minsql:9999
 // Date: Mon, 3 Oct 2016 22:32:00 GMT
 //
@@ -208,10 +210,10 @@ func shuffle(dsts []dataStore) []dataStore {
 //
 // Examples:
 // ## Use GET to list all tables
-// ~ curl http://minsql:9999/list
+// ~ curl http://minsql:9999/listTables
 //
 // ## With Authorization
-// ~ curl -H "Authorization: auth" http://minsql:9999/list
+// ~ curl -H "Authorization: auth" http://minsql:9999/listTables
 func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) {
 	var tables []string
 	a.RLock()
@@ -223,6 +225,167 @@ func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) 
 	encoder := json.NewEncoder(w)
 	encoder.Encode(tables)
 	w.(http.Flusher).Flush()
+}
+
+// ListDataStoresHandler - list all configured data stores
+//
+// GET /listDataStores HTTP/2.0
+// Host: minsql:9999
+// Date: Mon, 3 Oct 2016 22:32:00 GMT
+//
+//
+//
+// HTTP/2.0 200 OK
+// ...
+// ...
+// ["play"]
+//
+// Examples:
+// ## Use GET to list all configured data stores
+// ~ curl http://minsql:9999/listDataStores
+//
+// ## With Authorization
+// ~ curl -H "Authorization: auth" http://minsql:9999/listDataStores
+func (a *apiHandlers) ListDataStoresHandler(w http.ResponseWriter, r *http.Request) {
+	var dataStores []string
+	a.RLock()
+	for k := range a.config.Datastores {
+		dataStores = append(dataStores, k)
+	}
+	a.RUnlock()
+
+	encoder := json.NewEncoder(w)
+	encoder.Encode(dataStores)
+	w.(http.Flusher).Flush()
+}
+
+// CreateDataStoreHandler - create a new datastore
+//
+// POST /createDataStore HTTP/2.0
+// Host: minsql:9999
+// Date: Mon, 3 Oct 2016 22:32:00 GMT
+// Content-Type: application/x-www-form-urlencoded
+//
+// {
+//   "local1": {
+//     "endpoint": "http://localhost:9000",
+//     "access_key": "minio",
+//     "secret_key": "minio123",
+//     "bucket": "testbucket",
+//     "prefix": ""
+//   }
+// }
+//
+// HTTP/2.0 200 OK
+//
+// Examples:
+// ## Use POST to create a new datastore
+// ~ curl http://minsql:9999/createDataStore --data '{"local1": {"endpoint": "http://localhost:9000", "access_key": "minio", "secret_key": "minio123", "bucket": "testbucket", "prefix": ""}}'
+//
+// ## With Authorization
+// ~ curl -H "Authorization: auth" http://minsql:9999/createDataStore '{"local1": {"endpoint": "http://localhost:9000", "access_key": "minio", "secret_key": "minio123", "bucket": "testbucket", "prefix": ""}}'
+func (a *apiHandlers) CreateDataStoreHandler(w http.ResponseWriter, r *http.Request) {
+	storeConfig := make(map[string]dataStoreInfo)
+
+	if r.ContentLength > humanize.MiByte {
+		http.Error(w, "Your proposed size exceeds the maximum allowed input size.", http.StatusBadRequest)
+		return
+	}
+
+	decoder := json.NewDecoder(io.LimitReader(r.Body, r.ContentLength))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&storeConfig); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	a.Lock()
+	defer a.Unlock()
+
+	for k, v := range storeConfig {
+		a.config.Datastores[k] = v
+	}
+
+	pr, pw := io.Pipe()
+
+	te := toml.NewEncoder(pw)
+
+	go func() {
+		pw.CloseWithError(te.Encode(a.config))
+	}()
+
+	_, err := a.configClnt.PutObject(defaultConfigBucket, defaultConfigFile, pr, -1, minio.PutObjectOptions{})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	pr.Close()
+}
+
+// CreateTableHandler - create a new table
+//
+// POST /createTable HTTP/2.0
+// Host: minsql:9999
+// Date: Mon, 3 Oct 2016 22:32:00 GMT
+// Content-Type: application/x-www-form-urlencoded
+//
+// {
+//  "event": {
+//    "datastores": [
+//      "local1",
+//      "local2"
+//     ]
+//   }
+// }
+//
+// HTTP/2.0 200 OK
+//
+// Examples:
+// ## Use POST to create a new table
+// ~ curl http://minsql:9999/createTable --data '{"event": "datastores": ["local1", "local2"]}}'
+//
+// ## With Authorization
+// ~ curl -H "Authorization: auth" http://minsql:9999/createTable --data '{"event": "datastores": ["local1", "local2"]}}'
+func (a *apiHandlers) CreateTableHandler(w http.ResponseWriter, r *http.Request) {
+	tableConfig := make(map[string]tableInfo)
+
+	if r.ContentLength > humanize.MiByte {
+		http.Error(w, "Your proposed size exceeds the maximum allowed input size.", http.StatusBadRequest)
+		return
+	}
+
+	decoder := json.NewDecoder(io.LimitReader(r.Body, r.ContentLength))
+	decoder.DisallowUnknownFields()
+
+	if err := decoder.Decode(&tableConfig); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	a.Lock()
+	defer a.Unlock()
+
+	for k, v := range tableConfig {
+		a.config.Tables[k] = v
+	}
+
+	pr, pw := io.Pipe()
+
+	te := toml.NewEncoder(pw)
+
+	go func() {
+		pw.CloseWithError(te.Encode(a.config))
+	}()
+
+	_, err := a.configClnt.PutObject(defaultConfigBucket, defaultConfigFile, pr, -1, minio.PutObjectOptions{})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	pr.Close()
 }
 
 const timeFormat = "2006/Jan/02/15-04-05"

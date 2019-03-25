@@ -43,24 +43,28 @@ var globalFlags = []cli.Flag{
 }
 
 // Help template for minsql.
-var minsqlHelpTemplate = `DESCRIPTION:
-  {{.Description}}
+var minsqlHelpTemplate = `{{.Description}}
+
+MinSQL {{.Version}} by {{.Author}}
 
 USAGE:
   {{.HelpName}} {{if .VisibleFlags}}[FLAGS] {{end}}COMMAND{{if .VisibleFlags}}{{end}} [ARGS...]
+
+Environment:
+  MINIO_ENDPOINT    SCHEME://ADDRESS:PORT of the minio endpoint
+  MINIO_ACCESS_KEY  Access key for the minio endpoint
+  MINIO_SECRET_KEY  Secret key for the minio endpoint
 {{if .VisibleFlags}}
 FLAGS:
   {{range .VisibleFlags}}{{.}}
   {{end}}{{end}}
-VERSION:
-  ` + Version +
-	`{{ "\n"}}`
+`
 
 func newApp(name string) *cli.App {
 	// Set up app.
 	cli.HelpFlag = cli.BoolFlag{
 		Name:  "help, h",
-		Usage: "Show help.",
+		Usage: "show help",
 	}
 
 	app := cli.NewApp()

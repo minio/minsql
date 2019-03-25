@@ -48,23 +48,23 @@ const (
 )
 
 type authInfo struct {
-	Token  string        `toml:"token"`
-	API    []string      `toml:"api"`
-	Expire time.Duration `toml:"expire"`
-	Status authStatus    `toml:"status"`
+	Token  string        `json:"token" toml:"token"`
+	API    []string      `json:"api" toml:"api"`
+	Expire time.Duration `json:"expire" toml:"expire"`
+	Status authStatus    `json:"status" toml:"status"`
 }
 
 type dataStoreInfo struct {
-	Endpoint  string `toml:"endpoint"`
-	AccessKey string `toml:"access_key"`
-	SecretKey string `toml:"secret_key"`
-	Bucket    string `toml:"bucket"`
-	Prefix    string `toml:"prefix"`
+	Endpoint  string `json:"endpoint" toml:"endpoint"`
+	AccessKey string `json:"access_key" toml:"access_key"`
+	SecretKey string `json:"secret_key" toml:"secret_key"`
+	Bucket    string `json:"bucket" toml:"bucket"`
+	Prefix    string `json:"prefix" toml:"prefix"`
 }
 
 type tableInfo struct {
-	Datastores            []string `toml:"datastores"`
-	OutputRecordDelimiter string   `toml:"output_record_delimiter"`
+	Datastores            []string `json:"datastores" toml:"datastores"`
+	OutputRecordDelimiter string   `json:"output_record_delimiter" toml:"output_record_delimiter"`
 }
 
 func initMinSQLConfig(client *minio.Client) (*minSQLConfig, error) {

@@ -46,21 +46,21 @@ $ make dockerbuild
 $ ./minsql --help
 Distributed SQL based search engine for log data
 
-MinSQL DEVELOPMENT.GOGET by MinIO Inc.
+MinSQL 2019-03-25T06:55:23Z by MinIO, Inc.
 
-Usage:
-  minsql
+USAGE:
+  minsql [FLAGS] COMMAND [ARGS...]
 
 Environment:
   MINIO_ENDPOINT    SCHEME://ADDRESS:PORT of the minio endpoint
   MINIO_ACCESS_KEY  Access key for the minio endpoint
   MINIO_SECRET_KEY  Secret key for the minio endpoint
 
-Flags:
-      --address string     bind to a specific ADDRESS:PORT, ADDRESS can be an IP or hostname (default ":9999")
-      --certs-dir string   path to certs directory
-  -h, --help               help for minsql
-      --version            version for minsql
+FLAGS:
+  --address value    bind to a specific ADDRESS:PORT, ADDRESS can be an IP or hostname (default: ":9999")
+  --certs-dir value  path to certs directory (default: "/home/harsha/.minsql")
+  --help, -h         show help
+  --version, -v      print the version
 ```
 
 ## Setup
