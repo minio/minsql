@@ -464,12 +464,12 @@ func (a *apiHandlers) LogIngestHandler(w http.ResponseWriter, r *http.Request) {
 		if done {
 			return
 		}
-		fw, err := pfile.NewLocalFileWriter("stg.parquet")
+		fw, err := pfile.NewLocalFileWriter(parquetTable)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		defer os.Remove("stg.parquet")
+		defer os.Remove(parquetTable)
 		pw, err := pwriter.NewJSONWriter(string(schemaBytes), fw, 4)
 		if err != nil {
 			fw.Close()
