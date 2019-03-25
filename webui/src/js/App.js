@@ -2,6 +2,7 @@ import React, { Component } from "react"
 import api from "./api"
 import SqlInput from "./SqlInput"
 import Results from "./Results"
+import Manage from "./Manage"
 
 class App extends Component {
   constructor(props) {
@@ -45,6 +46,7 @@ class App extends Component {
   render() {
     return (
       <>
+        <Manage />
         {this.state.banner && (
           <section className="hero is-fullheight-with-navbar">
             <div className="hero-body">

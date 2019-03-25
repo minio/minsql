@@ -43,7 +43,7 @@ export const SqlInput = ({ sql: initSql, submitQuery, isBanner }) => {
   const [tables, setTables] = useState([])
   useEffect(() => {
     api.getTables().then(res => {
-      setTables(res)
+      setTables(Object.keys(res))
     })
   }, [])
 
