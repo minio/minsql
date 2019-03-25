@@ -48,6 +48,7 @@ func registerWebUIRouter(router *mux.Router) {
 // API prefixes
 const (
 	logAPI    = "/log"
+	listAPI   = "/list"
 	searchAPI = "/search"
 )
 
@@ -84,14 +85,19 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 
 	go api.watchMinSQLConfig()
 
-	// POST log API
-	router.Methods("POST").
+	// Log ingestion API
+	router.Methods(http.MethodPost).
 		PathPrefix(logAPI).
 		Path("/{table:.+}").
 		HandlerFunc(api.LogIngestHandler)
 
-	// GET query API
-	router.Methods("POST").
+	// List tables API
+	router.Methods(http.MethodGet).
+		PathPrefix(listAPI).
+		HandlerFunc(api.ListTablesHandler)
+
+	// Search query API
+	router.Methods(http.MethodPost).
 		PathPrefix(searchAPI).
 		HeadersRegexp("Content-Type", "application/x-www-form-urlencoded*").
 		HandlerFunc(api.SearchHandler)

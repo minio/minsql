@@ -193,6 +193,38 @@ func shuffle(dsts []dataStore) []dataStore {
 	return dsts
 }
 
+// ListTablesHandler - list all configured tables
+//
+// GET /list HTTP/2.0
+// Host: minsql:9999
+// Date: Mon, 3 Oct 2016 22:32:00 GMT
+//
+//
+//
+// HTTP/2.0 200 OK
+// ...
+// ...
+// ["temperature"]
+//
+// Examples:
+// ## Use GET to list all tables
+// ~ curl http://minsql:9999/list
+//
+// ## With Authorization
+// ~ curl -H "Authorization: auth" http://minsql:9999/list
+func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) {
+	var tables []string
+	a.RLock()
+	for k := range a.config.Tables {
+		tables = append(tables, k)
+	}
+	a.RUnlock()
+
+	encoder := json.NewEncoder(w)
+	encoder.Encode(tables)
+	w.(http.Flusher).Flush()
+}
+
 const timeFormat = "2006/Jan/02/15-04-05"
 
 // LogIngestHandler - run a query on an blob or a collection of blobs.
