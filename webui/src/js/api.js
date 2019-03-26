@@ -1,3 +1,5 @@
+import request from "superagent"
+
 export class API {
   getQueryResults(sql) {
     const url = `/search`
@@ -64,6 +66,14 @@ export class API {
           reject(err)
         })
     })
+  }
+
+  getTables() {
+    const url = "/ui/listTables"
+    return request
+      .get(url)
+      .then(res => res.body)
+      .then(tables => tables.sort())
   }
 }
 
