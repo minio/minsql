@@ -50,11 +50,11 @@ const (
 	logAPI    = "/log"
 	searchAPI = "/search"
 
-	listDataStoresAPI = "/listDataStores"
-	createDataStore   = "/createDataStore"
-
-	listTablesAPI = "/listTables"
-	createTable   = "/createTable"
+	// UI based config management calls
+	listDataStoresAPI = "/ui/listDataStores"
+	createDataStore   = "/ui/createDataStore"
+	listTablesAPI     = "/ui/listTables"
+	createTable       = "/ui/createTable"
 )
 
 func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
@@ -110,7 +110,6 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 	// Create new data store
 	router.Methods(http.MethodPost).
 		PathPrefix(createDataStore).
-		HeadersRegexp("Content-Type", "application/x-www-form-urlencoded*").
 		HandlerFunc(api.CreateDataStoreHandler)
 
 	// List configured tables
@@ -120,7 +119,6 @@ func configureMinSQLHandler(ctx *cli.Context) (http.Handler, error) {
 
 	router.Methods(http.MethodPost).
 		PathPrefix(createTable).
-		HeadersRegexp("Content-Type", "application/x-www-form-urlencoded*").
 		HandlerFunc(api.CreateTableHandler)
 
 	// Register web UI router.

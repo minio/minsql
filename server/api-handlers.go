@@ -197,11 +197,9 @@ func shuffle(dsts []dataStore) []dataStore {
 
 // ListTablesHandler - list all configured tables
 //
-// GET /listTables HTTP/2.0
+// GET /ui/listTables HTTP/2.0
 // Host: minsql:9999
 // Date: Mon, 3 Oct 2016 22:32:00 GMT
-//
-//
 //
 // HTTP/2.0 200 OK
 // ...
@@ -210,10 +208,10 @@ func shuffle(dsts []dataStore) []dataStore {
 //
 // Examples:
 // ## Use GET to list all tables
-// ~ curl http://minsql:9999/listTables
+// ~ curl http://minsql:9999/ui/listTables
 //
 // ## With Authorization
-// ~ curl -H "Authorization: auth" http://minsql:9999/listTables
+// ~ curl -H "Authorization: auth" http://minsql:9999/ui/listTables
 func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) {
 	var tables []string
 	a.RLock()
@@ -222,6 +220,7 @@ func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	a.RUnlock()
 
+	w.Header().Set("Content-Type", "application/json")
 	encoder := json.NewEncoder(w)
 	encoder.Encode(tables)
 	w.(http.Flusher).Flush()
@@ -229,11 +228,9 @@ func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) 
 
 // ListDataStoresHandler - list all configured data stores
 //
-// GET /listDataStores HTTP/2.0
+// GET /ui/listDataStores HTTP/2.0
 // Host: minsql:9999
 // Date: Mon, 3 Oct 2016 22:32:00 GMT
-//
-//
 //
 // HTTP/2.0 200 OK
 // ...
@@ -242,10 +239,10 @@ func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) 
 //
 // Examples:
 // ## Use GET to list all configured data stores
-// ~ curl http://minsql:9999/listDataStores
+// ~ curl http://minsql:9999/ui/listDataStores
 //
 // ## With Authorization
-// ~ curl -H "Authorization: auth" http://minsql:9999/listDataStores
+// ~ curl -H "Authorization: auth" http://minsql:9999/ui/listDataStores
 func (a *apiHandlers) ListDataStoresHandler(w http.ResponseWriter, r *http.Request) {
 	var dataStores []string
 	a.RLock()
@@ -254,6 +251,7 @@ func (a *apiHandlers) ListDataStoresHandler(w http.ResponseWriter, r *http.Reque
 	}
 	a.RUnlock()
 
+	w.Header().Set("Content-Type", "application/json")
 	encoder := json.NewEncoder(w)
 	encoder.Encode(dataStores)
 	w.(http.Flusher).Flush()
@@ -261,10 +259,9 @@ func (a *apiHandlers) ListDataStoresHandler(w http.ResponseWriter, r *http.Reque
 
 // CreateDataStoreHandler - create a new datastore
 //
-// POST /createDataStore HTTP/2.0
+// POST /ui/createDataStore HTTP/2.0
 // Host: minsql:9999
 // Date: Mon, 3 Oct 2016 22:32:00 GMT
-// Content-Type: application/x-www-form-urlencoded
 //
 // {
 //   "local1": {
@@ -280,10 +277,10 @@ func (a *apiHandlers) ListDataStoresHandler(w http.ResponseWriter, r *http.Reque
 //
 // Examples:
 // ## Use POST to create a new datastore
-// ~ curl http://minsql:9999/createDataStore --data '{"local1": {"endpoint": "http://localhost:9000", "access_key": "minio", "secret_key": "minio123", "bucket": "testbucket", "prefix": ""}}'
+// ~ curl http://minsql:9999/ui/createDataStore --data '{"local1": {"endpoint": "http://localhost:9000", "access_key": "minio", "secret_key": "minio123", "bucket": "testbucket", "prefix": ""}}'
 //
 // ## With Authorization
-// ~ curl -H "Authorization: auth" http://minsql:9999/createDataStore '{"local1": {"endpoint": "http://localhost:9000", "access_key": "minio", "secret_key": "minio123", "bucket": "testbucket", "prefix": ""}}'
+// ~ curl -H "Authorization: auth" http://minsql:9999/ui/createDataStore '{"local1": {"endpoint": "http://localhost:9000", "access_key": "minio", "secret_key": "minio123", "bucket": "testbucket", "prefix": ""}}'
 func (a *apiHandlers) CreateDataStoreHandler(w http.ResponseWriter, r *http.Request) {
 	storeConfig := make(map[string]dataStoreInfo)
 
@@ -326,10 +323,9 @@ func (a *apiHandlers) CreateDataStoreHandler(w http.ResponseWriter, r *http.Requ
 
 // CreateTableHandler - create a new table
 //
-// POST /createTable HTTP/2.0
+// POST /ui/createTable HTTP/2.0
 // Host: minsql:9999
 // Date: Mon, 3 Oct 2016 22:32:00 GMT
-// Content-Type: application/x-www-form-urlencoded
 //
 // {
 //  "event": {
@@ -344,10 +340,10 @@ func (a *apiHandlers) CreateDataStoreHandler(w http.ResponseWriter, r *http.Requ
 //
 // Examples:
 // ## Use POST to create a new table
-// ~ curl http://minsql:9999/createTable --data '{"event": "datastores": ["local1", "local2"]}}'
+// ~ curl http://minsql:9999/ui/createTable --data '{"event": "datastores": ["local1", "local2"]}}'
 //
 // ## With Authorization
-// ~ curl -H "Authorization: auth" http://minsql:9999/createTable --data '{"event": "datastores": ["local1", "local2"]}}'
+// ~ curl -H "Authorization: auth" http://minsql:9999/ui/createTable --data '{"event": "datastores": ["local1", "local2"]}}'
 func (a *apiHandlers) CreateTableHandler(w http.ResponseWriter, r *http.Request) {
 	tableConfig := make(map[string]tableInfo)
 
