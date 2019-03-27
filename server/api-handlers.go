@@ -204,8 +204,6 @@ func shuffle(dsts []dataStore) []dataStore {
 // HTTP/2.0 200 OK
 // ...
 // ...
-// ["temperature"]
-//
 // Examples:
 // ## Use GET to list all tables
 // ~ curl http://minsql:9999/ui/listTables
@@ -213,16 +211,12 @@ func shuffle(dsts []dataStore) []dataStore {
 // ## With Authorization
 // ~ curl -H "Authorization: auth" http://minsql:9999/ui/listTables
 func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) {
-	var tables []string
-	a.RLock()
-	for k := range a.config.Tables {
-		tables = append(tables, k)
-	}
-	a.RUnlock()
-
 	w.Header().Set("Content-Type", "application/json")
 	encoder := json.NewEncoder(w)
-	encoder.Encode(tables)
+
+	a.RLock()
+	encoder.Encode(&a.config.Tables)
+	a.RUnlock()
 	w.(http.Flusher).Flush()
 }
 
@@ -235,8 +229,6 @@ func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) 
 // HTTP/2.0 200 OK
 // ...
 // ...
-// ["play"]
-//
 // Examples:
 // ## Use GET to list all configured data stores
 // ~ curl http://minsql:9999/ui/listDataStores
@@ -244,16 +236,11 @@ func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) 
 // ## With Authorization
 // ~ curl -H "Authorization: auth" http://minsql:9999/ui/listDataStores
 func (a *apiHandlers) ListDataStoresHandler(w http.ResponseWriter, r *http.Request) {
-	var dataStores []string
-	a.RLock()
-	for k := range a.config.Datastores {
-		dataStores = append(dataStores, k)
-	}
-	a.RUnlock()
-
 	w.Header().Set("Content-Type", "application/json")
 	encoder := json.NewEncoder(w)
-	encoder.Encode(dataStores)
+	a.RLock()
+	encoder.Encode(&a.config.Datastores)
+	a.RUnlock()
 	w.(http.Flusher).Flush()
 }
 
