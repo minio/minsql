@@ -4,19 +4,34 @@
 @import "bulma";
 @import "suggest";
 
+.container {
+  padding-bottom: 60px;
+}
+
+.title {
+  color: #C72C48;
+  font-size: 2rem;
+  font-weight: 600;
+  line-height: 1.125;
+}
+
 .query__banner {
   margin: 0 auto;
-  max-width: 600px;
+  max-width: 700px;
 }
 
 .query__banner .title {
   text-align: center;
   color: #C72C48;
+  font-size: 70px;
 }
 
 .query__form {
   flex: 1 1;
   min-width: 500px;
+  padding-top: 6px;
+  position: relative;
+  padding-left: 12px;
 }
 
 .query__input {
