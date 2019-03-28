@@ -7,7 +7,7 @@ const MenuIcon = () => (
   </svg>
 )
 
-export const Menu = ({ showTables }) => {
+export const Menu = ({ showTables, showDataStores }) => {
   const [showMenu, setShowMenu] = useState(false)
 
   function onMenuClicked() {
@@ -18,6 +18,12 @@ export const Menu = ({ showTables }) => {
     setShowMenu(false)
     showTables()
   }
+
+  function dataStoresClicked() {
+    setShowMenu(false)
+    showDataStores()
+  }
+
   return (
     <OutsideClickHandler onOutsideClick={() => setShowMenu(false)}>
       <div className="dropdown menu is-right is-active">
@@ -34,7 +40,7 @@ export const Menu = ({ showTables }) => {
                 <p>List, Create</p>
               </a>
               <hr className="dropdown-divider" />
-              <a className="dropdown-item">
+              <a className="dropdown-item" onClick={dataStoresClicked}>
                 <h3 className="is-size-6 has-text-weight-semibold">
                   Data sources
                 </h3>
