@@ -73,7 +73,7 @@ export class API {
     return request
       .get(url)
       .then(res => res.body)
-      .then(tables => tables.sort())
+      .then(tables => Object.keys(tables))
   }
 }
 
