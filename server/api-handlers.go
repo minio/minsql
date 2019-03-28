@@ -626,39 +626,46 @@ func (a *apiHandlers) SearchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var wg = &sync.WaitGroup{}
-	ch := make(chan dataStore, runtime.NumCPU())
+	ch := make(chan dataStore)
+	chR := make(chan io.ReadCloser)
 	for i := 0; i < runtime.NumCPU(); i++ {
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
-			ds, ok := <-ch
-			if ok {
-				sresults, _ := ds.client.SelectObjectContent(context.Background(), ds.bucket, ds.prefix, opts)
-				if sresults != nil {
-					io.Copy(w, sresults)
-					w.(http.Flusher).Flush()
-					sresults.Close()
+			for {
+				select {
+				case ds, ok := <-ch:
+					if !ok {
+						return
+					}
+					sresults, _ := ds.client.SelectObjectContent(context.Background(), ds.bucket, ds.prefix, opts)
+					if sresults != nil {
+						chR <- sresults
+					}
 				}
 			}
 		}()
 	}
 
-	doneCh := make(chan struct{}, 1)
-	defer close(doneCh)
-
 	for _, dst := range dsts {
-		for obj := range dst.client.ListObjects(dst.bucket, path.Join(dst.prefix, table), true, doneCh) {
+		for obj := range dst.client.ListObjects(dst.bucket, path.Join(dst.prefix, table), true, nil) {
 			if obj.Size > 0 && !strings.HasSuffix(obj.Key, "/") {
 				ch <- dataStore{
 					client: dst.client,
 					bucket: dst.bucket,
 					prefix: obj.Key,
 				}
+				results := <-chR
+				if _, err := io.Copy(w, results); err != nil {
+					results.Close()
+					// Client died, we simply break out
+					// and let the handler return.
+					break
+				}
+				w.(http.Flusher).Flush()
+				results.Close()
 			}
 		}
 	}
 
 	close(ch)
-	wg.Wait()
+	close(chR)
 }

@@ -47,6 +47,14 @@ func handleSignals(server *http.Server, tlsCerts *certs.Certs, httpServerErrorCh
 
 		// Doesn't block if no connections, but will otherwise wait
 		// until the timeout deadline.
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		go func() {
+			select {
+			case _ = <-ticker.C:
+				log.Println("Attempting to shutdown HTTP server, waiting for active connections to shutdown")
+			}
+		}()
 		return server.Shutdown(ctx) == nil
 	}
 
