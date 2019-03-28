@@ -19,3 +19,29 @@
     transform: rotate(360deg);
   }
 }
+
+.menu {
+  position: absolute;
+  right: 20px;
+  top: 12px;
+  z-index: 100;
+}
+
+.hamburger {
+  display: inline-block;
+  cursor: pointer;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  box-sizing: content-box;
+  padding: 10px;
+  &:hover,
+  &:focus {
+    background-color: rgba(60, 64, 67, 0.08);
+  }
+  svg {
+    color: black;
+    opacity: 0.8;
+    fill: currentColor;
+  }
+}

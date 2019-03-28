@@ -1,15 +1,16 @@
 @import "variables";
+@import "bulma";
 @import "mixins";
 @import "misc";
-@import "bulma";
 @import "suggest";
+@import "modal";
 
 .container {
   padding-bottom: 60px;
 }
 
 .title {
-  color: #C72C48;
+  color: #c72c48;
   font-size: 2rem;
   font-weight: 600;
   line-height: 1.125;
@@ -22,7 +23,7 @@
 
 .query__banner .title {
   text-align: center;
-  color: #C72C48;
+  color: #c72c48;
   font-size: 70px;
 }
 

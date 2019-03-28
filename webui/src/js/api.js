@@ -70,10 +70,42 @@ export class API {
 
   getTables() {
     const url = "/ui/listTables"
+    return request.get(url).then(res => res.body)
+  }
+
+  createTable(table, datastores) {
+    const url = "/ui/createTable"
+    const data = {
+      [table]: {
+        datastores: datastores
+      }
+    }
     return request
-      .get(url)
+      .post(url)
+      .send(data)
       .then(res => res.body)
-      .then(tables => Object.keys(tables))
+  }
+
+  getDatastores() {
+    const url = "/ui/listDataStores"
+    return request.get(url).then(res => res.body)
+  }
+
+  createDataStore(datastore, endpoint, accessKey, secretKey, bucket, prefix) {
+    const url = "/ui/createDataStore"
+    const data = {
+      [datastore]: {
+        endpoint: endpoint,
+        access_key: accessKey,
+        secret_key: secretKey,
+        bucket: bucket,
+        prefix: prefix
+      }
+    }
+    return request
+      .post(url)
+      .send(data)
+      .then(res => res.body)
   }
 }
 
