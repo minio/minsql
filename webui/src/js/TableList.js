@@ -18,7 +18,7 @@ export const TableList = ({ showCreate, closeModal }) => {
             {Object.keys(tables).map(table => (
               <tr key={table}>
                 <td>{table}</td>
-                <td>{tables[table].datastores.join(",")}</td>
+                <td>{tables[table].datastores.join(", ")}</td>
               </tr>
             ))}
           </tbody>
