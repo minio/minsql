@@ -238,9 +238,18 @@ func (a *apiHandlers) ListTablesHandler(w http.ResponseWriter, r *http.Request) 
 func (a *apiHandlers) ListDataStoresHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	encoder := json.NewEncoder(w)
+
 	a.RLock()
-	encoder.Encode(&a.config.Datastores)
+	dataStores := make(map[string]dataStoreInfo)
+	for k, v := range a.config.Datastores {
+		dataStores[k] = dataStoreInfo{
+			Endpoint: v.Endpoint,
+			Bucket:   v.Bucket,
+			Prefix:   v.Prefix,
+		}
+	}
 	a.RUnlock()
+	encoder.Encode(&dataStores)
 	w.(http.Flusher).Flush()
 }
 

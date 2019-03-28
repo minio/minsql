@@ -56,8 +56,8 @@ type authInfo struct {
 
 type dataStoreInfo struct {
 	Endpoint  string `json:"endpoint" toml:"endpoint"`
-	AccessKey string `json:"-" toml:"access_key"`
-	SecretKey string `json:"-" toml:"secret_key"`
+	AccessKey string `json:"access_key,omitempty" toml:"access_key"`
+	SecretKey string `json:"secret_key,omitempty" toml:"secret_key"`
 	Bucket    string `json:"bucket" toml:"bucket"`
 	Prefix    string `json:"prefix" toml:"prefix"`
 }
