@@ -1,6 +1,6 @@
 {
-  "short_name": "React App",
-  "name": "Create React App Sample",
+  "short_name": "MinSQL",
+  "name": "MinSQL - Distributed SQL based search engine for log data",
   "icons": [
     {
       "src": "favicon.ico",
