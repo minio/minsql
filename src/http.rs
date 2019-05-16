@@ -1,6 +1,9 @@
-use futures::{ Future, Stream};
+use futures::{Future, Stream};
 use hyper::{Body, Chunk, Client, header, Method, Request, Response, StatusCode};
 use hyper::client::HttpConnector;
+
+use crate::config::Config;
+use crate::storage::write_to_datastore;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type ResponseFuture = Box<Future<Item=Response<Body>, Error=GenericError> + Send>;
@@ -8,20 +11,21 @@ pub type ResponseFuture = Box<Future<Item=Response<Body>, Error=GenericError> + 
 static URL: &str = "http://127.0.0.1:1337/json_api";
 static POST_DATA: &str = r#"{"original": "data"}"#;
 
-//use crate::config::Config;
-
-pub fn api_log_put_response(req: Request<Body>) -> ResponseFuture {
+pub fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
     info!("Logging data");
+    // make a clone of the config for the closure
+    let cfg = cfg.clone();
     Box::new(req.into_body()
         .concat2() // Concatenate all chunks in the body
         .from_err()
-        .and_then(|entire_body| {
+        .and_then(move |entire_body| {
             // Read the body from the request
             let payload: String = match String::from_utf8(entire_body.to_vec()) {
                 Ok(str) => str,
                 Err(err) => panic!("Couldn't convert buffer to string: {}", err)
             };
             println!("Log Data:\n{}", payload);
+            write_to_datastore(&"mylog", &cfg.datastore[0], &payload);
             // Send response that the request has been received successfully
             let response = Response::builder()
                 .status(StatusCode::OK)

@@ -5,7 +5,7 @@ use std::fs;
 
 //TODO: Remove serialize derive before commit
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub version: String,
     pub server: Option<Server>,
@@ -14,7 +14,7 @@ pub struct Config {
     pub auth: HashMap<String, HashMap<String, LogAuth>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Server {
     pub address: Option<String>,
     pub tls_cert: Option<String>,
@@ -22,7 +22,7 @@ pub struct Server {
     pub ca_certs: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct DataStore {
     pub name: Option<String>,
     pub endpoint: String,
@@ -32,7 +32,7 @@ pub struct DataStore {
     pub prefix: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Log {
     pub name: String,
     pub datastores: Vec<String>,
@@ -40,7 +40,7 @@ pub struct Log {
 }
 
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct LogAuth {
     pub token: String,
     pub api: Vec<String>,

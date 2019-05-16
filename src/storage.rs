@@ -1,3 +1,4 @@
+use chrono::{Datelike, Utc};
 use futures::Future;
 use futures::future::FutureResult;
 use futures::future::result;
@@ -7,7 +8,7 @@ use rusoto_core::Region;
 use rusoto_credential::AwsCredentials;
 use rusoto_credential::CredentialsError;
 use rusoto_credential::ProvideAwsCredentials;
-use rusoto_s3::{ListObjectsRequest, S3, S3Client};
+use rusoto_s3::{ListObjectsRequest, PutObjectRequest, S3, S3Client};
 
 use crate::config::DataStore;
 
@@ -49,8 +50,7 @@ impl ProvideAwsCredentials for CustomCredentialsProvider {
     }
 }
 
-// <p>Function used to verify if a datastore is valid in terms of reachability</p>
-pub fn can_reach_datastore(datastore: &DataStore) -> bool {
+fn client_for_datastore(datastore: &DataStore) -> S3Client {
     // Create a credentials holder, for our provider to provide into the s3 client
     let credentials = AwsCredentials::new(
         &datastore.access_key[..],
@@ -69,6 +69,13 @@ pub fn can_reach_datastore(datastore: &DataStore) -> bool {
         dispatcher,
         provider,
         region);
+    s3_client
+}
+
+// <p>Function used to verify if a datastore is valid in terms of reachability</p>
+pub fn can_reach_datastore(datastore: &DataStore) -> bool {
+    // Get the Object Storage client
+    let s3_client = client_for_datastore(datastore);
     // perform list call to verify we have access
     let can_reach = match s3_client.list_objects(
         ListObjectsRequest {
@@ -89,6 +96,32 @@ pub fn can_reach_datastore(datastore: &DataStore) -> bool {
     can_reach
 }
 
-//pub fn write_to_datastore(datastore: &DataStore, payload: &String) {
-//    println!("Writing to datastore");
-//}
+fn str_to_streaming_body(s: String) -> rusoto_s3::StreamingBody {
+    s.into_bytes().into()
+}
+
+pub fn write_to_datastore(logname: &str, datastore: &DataStore, payload: &String) {
+    println!("Writing to datastore {}", payload);
+    // Get the Object Storage client
+    let s3_client = client_for_datastore(datastore);
+    let now = Utc::now();
+    let target_file = format!("{log}/{year}/{month}/{day}-{ts}.msl.uncompacted",
+                              log = logname,
+                              year = now.date().year(),
+                              month = now.date().month(),
+                              day = now.date().day(),
+                              ts = now.timestamp());
+    let destination = format!("minsql/{}", target_file);
+    println!("Writing to  {}", destination);
+
+    let strbody = str_to_streaming_body(payload.clone());
+
+    s3_client.put_object(PutObjectRequest {
+        bucket: datastore.bucket.clone(),
+        key: destination,
+        body: Some(strbody),
+        ..Default::default()
+    }).sync().expect("could not upload");
+
+    println!("done");
+}

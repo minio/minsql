@@ -27,7 +27,7 @@ mod storage;
 static INDEX: &[u8] = b"<a href=\"test.html\">test.html</a>";
 static NOTFOUND: &[u8] = b"Not Found";
 
-fn request_router(req: Request<Body>, client: &Client<HttpConnector>) -> http::ResponseFuture {
+fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &config::Config) -> http::ResponseFuture {
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/") | (&Method::GET, "/index.html") => {
             let body = Body::from(INDEX);
@@ -40,7 +40,7 @@ fn request_router(req: Request<Body>, client: &Client<HttpConnector>) -> http::R
             http::api_post_response(req)
         }
         (&Method::PUT, "/mylog/store") => {
-            http::api_log_put_response(req)
+            http::api_log_put_response(cfg, req)
         }
         _ => {
             // Return 404 not found response.
@@ -55,31 +55,25 @@ fn request_router(req: Request<Body>, client: &Client<HttpConnector>) -> http::R
 
 
 fn main() {
+    pretty_env_logger::init();
     // Load the configuration file
     let configuration = match config::load_configuration() {
         Ok(cfg) => cfg,
         Err(e) => {
-            println!("Failed to load configuration: {}", e);
+            error!("Failed to load configuration: {}", e);
             process::exit(0x0100);
         }
     };
-
-    println!("version: {}", configuration.version);
-    println!("server.address: {}", configuration.server.as_ref().unwrap().address.as_ref().unwrap());
-    println!("datastore: \n{}", toml::to_string(&configuration.datastore).unwrap());
-    println!("log: \n{}", toml::to_string(&configuration.log).unwrap());
-    println!("auth: \n{}", toml::to_string(&configuration.auth).unwrap());
 
     // Validate all datastore for reachability
     for ds in configuration.datastore.iter() {
         // if we find a bad datastore, for now let's panic
         if storage::can_reach_datastore(ds) == false {
-            println!("{} is not a reachable datastore", ds.name.clone().unwrap());
+            error!("{} is not a reachable datastore", ds.name.clone().unwrap());
             process::exit(0x0100);
         }
     }
 
-    pretty_env_logger::init();
     info!("Starting MinSQL Server");
 
     let addr = "0.0.0.0:9999".parse().unwrap();
@@ -91,8 +85,11 @@ fn main() {
         let new_service = move || {
             // Move a clone of `client` into the `service_fn`.
             let client = client.clone();
+            // Move a clone of `configuration` into the `service_fn`.
+            let cfg = configuration.clone();
+
             service_fn(move |req| {
-                request_router(req, &client)
+                request_router(req, &client, &cfg)
             })
         };
 
