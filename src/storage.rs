@@ -101,7 +101,6 @@ fn str_to_streaming_body(s: String) -> rusoto_s3::StreamingBody {
 }
 
 pub fn write_to_datastore(logname: &str, datastore: &DataStore, payload: &String) {
-    println!("Writing to datastore {}", payload);
     // Get the Object Storage client
     let s3_client = client_for_datastore(datastore);
     let now = Utc::now();
@@ -112,16 +111,13 @@ pub fn write_to_datastore(logname: &str, datastore: &DataStore, payload: &String
                               day = now.date().day(),
                               ts = now.timestamp());
     let destination = format!("minsql/{}", target_file);
-    println!("Writing to  {}", destination);
-
+    // turn the payload into a streaming body
     let strbody = str_to_streaming_body(payload.clone());
-
+    // save the payload
     s3_client.put_object(PutObjectRequest {
         bucket: datastore.bucket.clone(),
         key: destination,
         body: Some(strbody),
         ..Default::default()
     }).sync().expect("could not upload");
-
-    println!("done");
 }

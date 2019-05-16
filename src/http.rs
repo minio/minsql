@@ -1,3 +1,5 @@
+use std::fmt;
+
 use futures::{future, Future, Stream};
 use hyper::{Body, Chunk, Client, header, Method, Request, Response, StatusCode};
 use hyper::client::HttpConnector;
@@ -15,34 +17,113 @@ static POST_DATA: &str = r#"{"original": "data"}"#;
 static INDEX: &[u8] = b"<a href=\"test.html\">test.html</a>";
 static NOTFOUND: &[u8] = b"Not Found";
 
+#[derive(Debug)]
+struct RequestedLog {
+    log: String,
+    method: String,
+}
+
+#[derive(Debug)]
+pub struct RequestedLogError {
+    details: String
+}
+
+impl RequestedLogError {
+    pub fn new(msg: &str) -> RequestedLogError {
+        RequestedLogError { details: msg.to_string() }
+    }
+}
+
+impl fmt::Display for RequestedLogError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+// Return 404 not found response.
+fn return_404() -> ResponseFuture {
+    let body = Body::from(NOTFOUND);
+    Box::new(future::ok(Response::builder()
+        .status(StatusCode::NOT_FOUND)
+        .body(body)
+        .unwrap()))
+}
+
+fn requested_log_from_request(req: &Request<Body>) -> Result<RequestedLog, RequestedLogError> {
+    let request_path_no_slash = String::from(&req.uri().path()[1..]);
+    let path_split = request_path_no_slash.split("/");
+    let parts: Vec<&str> = path_split.collect();
+    if parts.len() != 2 {
+        return Err(RequestedLogError::new("Invalid log structure"));
+    }
+    let logname = parts[0].to_string();
+    let method = parts[1].to_string();
+    return Ok(RequestedLog { log: logname, method: method });
+}
+
 pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &Config) -> ResponseFuture {
-    match (req.method(), req.uri().path()) {
-        (&Method::GET, "/") | (&Method::GET, "/index.html") => {
-            let body = Body::from(INDEX);
-            Box::new(future::ok(Response::new(body)))
+    // handle GETs as their own thing
+    if req.method() == &Method::GET {
+        match (req.method(), req.uri().path()) {
+            (&Method::GET, "/") | (&Method::GET, "/index.html") => {
+                let body = Body::from(INDEX);
+                Box::new(future::ok(Response::new(body)))
+            }
+            (&Method::GET, "/test.html") => {
+                client_request_response(client)
+            }
+            _ => {
+                // Return 404 not found response.
+                return_404()
+            }
         }
-        (&Method::GET, "/test.html") => {
-            client_request_response(client)
+    } else {
+        //request path without the /
+        let logname = match requested_log_from_request(&req) {
+            Ok(ln) => ln,
+            Err(e) => {
+                error!("Failed to load configuration: {}", e);
+                return return_404();
+            }
+        };
+
+        println!("rq {:?}", logname);
+        // is this a valid logname? else reject
+        let mut found = false;
+        for log in &cfg.log {
+            if log.name == logname.log {
+                found = true;
+            }
         }
-        (&Method::POST, "/mylog/search") => {
-            api_post_response(req)
+        if found == false {
+            return return_404();
         }
-        (&Method::PUT, "/mylog/store") => {
-            api_log_put_response(cfg, req)
-        }
-        _ => {
-            // Return 404 not found response.
-            let body = Body::from(NOTFOUND);
-            Box::new(future::ok(Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(body)
-                .unwrap()))
+
+
+        match (req.method(), &logname.method[..]) {
+            (&Method::POST, "search") => {
+                api_post_response(req)
+            }
+            (&Method::PUT, "store") => {
+                api_log_put_response(cfg, req)
+            }
+            _ => {
+                // Return 404 not found response.
+                return return_404();
+            }
         }
     }
 }
 
 fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
     info!("Logging data");
+    let requested_log = match requested_log_from_request(&req) {
+        Ok(ln) => ln,
+        Err(e) => {
+            error!("{}", e);
+            return return_404();
+        }
+    };
     // make a clone of the config for the closure
     let cfg = cfg.clone();
     Box::new(req.into_body()
@@ -55,7 +136,7 @@ fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                 Err(err) => panic!("Couldn't convert buffer to string: {}", err)
             };
             println!("Log Data:\n{}", payload);
-            write_to_datastore(&"mylog", &cfg.datastore[0], &payload);
+            write_to_datastore(&requested_log.log, &cfg.datastore[0], &payload);
             // Send response that the request has been received successfully
             let response = Response::builder()
                 .status(StatusCode::OK)
@@ -77,7 +158,7 @@ fn client_request_response(client: &Client<HttpConnector>) -> ResponseFuture {
     Box::new(client.request(req).from_err().map(|web_res| {
         // Compare the JSON we sent (before) with what we received (after):
         let body = Body::wrap_stream(web_res.into_body().map(|b| {
-            Chunk::from(format!("<b>POST request body</b>: {}<br><b>Response</b>: {}",
+            Chunk::from(format!("MinSQL",
                                 POST_DATA,
                                 std::str::from_utf8(&b).unwrap()))
         }));
