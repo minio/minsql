@@ -1,4 +1,4 @@
-use futures::{Future, Stream};
+use futures::{future, Future, Stream};
 use hyper::{Body, Chunk, Client, header, Method, Request, Response, StatusCode};
 use hyper::client::HttpConnector;
 
@@ -11,7 +11,37 @@ pub type ResponseFuture = Box<Future<Item=Response<Body>, Error=GenericError> + 
 static URL: &str = "http://127.0.0.1:1337/json_api";
 static POST_DATA: &str = r#"{"original": "data"}"#;
 
-pub fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
+
+static INDEX: &[u8] = b"<a href=\"test.html\">test.html</a>";
+static NOTFOUND: &[u8] = b"Not Found";
+
+pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &Config) -> ResponseFuture {
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, "/") | (&Method::GET, "/index.html") => {
+            let body = Body::from(INDEX);
+            Box::new(future::ok(Response::new(body)))
+        }
+        (&Method::GET, "/test.html") => {
+            client_request_response(client)
+        }
+        (&Method::POST, "/mylog/search") => {
+            api_post_response(req)
+        }
+        (&Method::PUT, "/mylog/store") => {
+            api_log_put_response(cfg, req)
+        }
+        _ => {
+            // Return 404 not found response.
+            let body = Body::from(NOTFOUND);
+            Box::new(future::ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(body)
+                .unwrap()))
+        }
+    }
+}
+
+fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
     info!("Logging data");
     // make a clone of the config for the closure
     let cfg = cfg.clone();
@@ -36,7 +66,7 @@ pub fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture 
     )
 }
 
-pub fn client_request_response(client: &Client<HttpConnector>) -> ResponseFuture {
+fn client_request_response(client: &Client<HttpConnector>) -> ResponseFuture {
     let req = Request::builder()
         .method(Method::POST)
         .uri(URL)
@@ -56,7 +86,7 @@ pub fn client_request_response(client: &Client<HttpConnector>) -> ResponseFuture
     }))
 }
 
-pub fn api_post_response(req: Request<Body>) -> ResponseFuture {
+fn api_post_response(req: Request<Body>) -> ResponseFuture {
     // A web api to run against
     Box::new(req.into_body()
         .concat2() // Concatenate all chunks in the body

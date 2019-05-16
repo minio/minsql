@@ -13,45 +13,12 @@ extern crate toml;
 use std::process;
 
 use futures::{future, Future};
-use hyper::{Body, Client, Method, Request, Response, Server, StatusCode};
-use hyper::client::HttpConnector;
+use hyper::{Client, Server};
 use hyper::service::service_fn;
-
-//use serde::{Deserialize};
 
 mod config;
 mod http;
 mod storage;
-
-
-static INDEX: &[u8] = b"<a href=\"test.html\">test.html</a>";
-static NOTFOUND: &[u8] = b"Not Found";
-
-fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &config::Config) -> http::ResponseFuture {
-    match (req.method(), req.uri().path()) {
-        (&Method::GET, "/") | (&Method::GET, "/index.html") => {
-            let body = Body::from(INDEX);
-            Box::new(future::ok(Response::new(body)))
-        }
-        (&Method::GET, "/test.html") => {
-            http::client_request_response(client)
-        }
-        (&Method::POST, "/mylog/search") => {
-            http::api_post_response(req)
-        }
-        (&Method::PUT, "/mylog/store") => {
-            http::api_log_put_response(cfg, req)
-        }
-        _ => {
-            // Return 404 not found response.
-            let body = Body::from(NOTFOUND);
-            Box::new(future::ok(Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(body)
-                .unwrap()))
-        }
-    }
-}
 
 
 fn main() {
@@ -89,7 +56,7 @@ fn main() {
             let cfg = configuration.clone();
 
             service_fn(move |req| {
-                request_router(req, &client, &cfg)
+                http::request_router(req, &client, &cfg)
             })
         };
 
