@@ -14,7 +14,7 @@ static URL: &str = "http://127.0.0.1:1337/json_api";
 static POST_DATA: &str = r#"{"original": "data"}"#;
 
 
-static INDEX: &[u8] = b"<a href=\"test.html\">test.html</a>";
+static INDEX: &[u8] = b"MinSQL";
 static NOTFOUND: &[u8] = b"Not Found";
 
 #[derive(Debug)]
@@ -158,7 +158,7 @@ fn client_request_response(client: &Client<HttpConnector>) -> ResponseFuture {
     Box::new(client.request(req).from_err().map(|web_res| {
         // Compare the JSON we sent (before) with what we received (after):
         let body = Body::wrap_stream(web_res.into_body().map(|b| {
-            Chunk::from(format!("MinSQL",
+            Chunk::from(format!("<b>POST request body</b>: {}<br><b>Response</b>: {}",
                                 POST_DATA,
                                 std::str::from_utf8(&b).unwrap()))
         }));
