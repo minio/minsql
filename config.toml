@@ -1,0 +1,31 @@
+version = "1"
+
+[server]
+#   tls_cert = "/certs/tls.crt"
+#   tls_key = "/certs/tls.pem"
+#   ca_certs = "/certs/ca"
+   address = ":9999"
+#   Cache_dir = ""
+
+
+
+[[datastore]]
+name = "myminio"
+endpoint = "http://localhost:9000"
+access_key = "minio"
+secret_key = "minio123"
+bucket = "mindev"
+prefix = ""
+
+
+[[log]]
+name = "mylog"
+datastores = ["myminio"]
+commit_window = "0s"
+
+
+[auth.TOKEN1.mylog]
+   token = "TOKEN1"
+   api = ["search"]
+   expire = "duration"
+   status = "enabled"
