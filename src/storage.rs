@@ -1,4 +1,7 @@
-use chrono::{Datelike, Utc};
+use std::fmt;
+use std::time::Instant;
+
+use chrono::{Datelike, Timelike, Utc};
 use futures::Future;
 use futures::future::FutureResult;
 use futures::future::result;
@@ -9,6 +12,7 @@ use rusoto_credential::AwsCredentials;
 use rusoto_credential::CredentialsError;
 use rusoto_credential::ProvideAwsCredentials;
 use rusoto_s3::{ListObjectsRequest, PutObjectRequest, S3, S3Client};
+use uuid::Uuid;
 
 use crate::config::DataStore;
 
@@ -100,24 +104,53 @@ fn str_to_streaming_body(s: String) -> rusoto_s3::StreamingBody {
     s.into_bytes().into()
 }
 
-pub fn write_to_datastore(logname: &str, datastore: &DataStore, payload: &String) {
+#[derive(Debug)]
+pub struct WriteDatastoreError {
+    details: String
+}
+
+impl WriteDatastoreError {
+    pub fn new(msg: &str) -> WriteDatastoreError {
+        WriteDatastoreError { details: msg.to_string() }
+    }
+}
+
+impl fmt::Display for WriteDatastoreError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+pub fn write_to_datastore(logname: &str, datastore: &DataStore, payload: &String) -> Result<bool, WriteDatastoreError> {
+    let start = Instant::now();
     // Get the Object Storage client
     let s3_client = client_for_datastore(datastore);
     let now = Utc::now();
-    let target_file = format!("{log}/{year}/{month}/{day}-{ts}.msl.uncompacted",
+    let my_uuid = Uuid::new_v4();
+    let target_file = format!("{log}/{year}/{month}/{day}/{hour}/{ts}.msl.uncompacted",
                               log = logname,
                               year = now.date().year(),
                               month = now.date().month(),
                               day = now.date().day(),
-                              ts = now.timestamp());
+                              hour = now.hour(),
+                              ts = my_uuid);
     let destination = format!("minsql/{}", target_file);
     // turn the payload into a streaming body
     let strbody = str_to_streaming_body(payload.clone());
     // save the payload
-    s3_client.put_object(PutObjectRequest {
+    match s3_client.put_object(PutObjectRequest {
         bucket: datastore.bucket.clone(),
         key: destination,
         body: Some(strbody),
         ..Default::default()
-    }).sync().expect("could not upload");
+    }).sync() {
+        Ok(x) => x,
+        Err(e) => {
+            return Err(WriteDatastoreError::new(&format!("Could not write to datastore: {}", e)[..]));
+        }
+    };
+    let duration = start.elapsed();
+
+    println!("Writing to minio: {:?}", duration);
+    Ok(true)
 }

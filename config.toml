@@ -4,7 +4,7 @@ version = "1"
 #   tls_cert = "/certs/tls.crt"
 #   tls_key = "/certs/tls.pem"
 #   ca_certs = "/certs/ca"
-   address = ":9999"
+   address = "0.0.0.0:9999"
 #   Cache_dir = ""
 
 

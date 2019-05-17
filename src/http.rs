@@ -87,7 +87,6 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
             }
         };
 
-        println!("rq {:?}", logname);
         // is this a valid logname? else reject
         let mut found = false;
         for log in &cfg.log {
@@ -116,7 +115,7 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
 }
 
 fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
-    info!("Logging data");
+//    info!("Logging data");
     let requested_log = match requested_log_from_request(&req) {
         Ok(ln) => ln,
         Err(e) => {
@@ -135,8 +134,18 @@ fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                 Ok(str) => str,
                 Err(err) => panic!("Couldn't convert buffer to string: {}", err)
             };
-            println!("Log Data:\n{}", payload);
-            write_to_datastore(&requested_log.log, &cfg.datastore[0], &payload);
+            match write_to_datastore(&requested_log.log, &cfg.datastore[0], &payload)  {
+                Ok(x) => x,
+                Err(e) => {
+                    error!("{}", e);
+                    let response = Response::builder()
+                        .status(StatusCode::INSUFFICIENT_STORAGE)
+                        .header(header::CONTENT_TYPE, "text/plain")
+                        .body(Body::from("fail"))?;
+                    return Ok(response)
+                }
+            };
+
             // Send response that the request has been received successfully
             let response = Response::builder()
                 .status(StatusCode::OK)

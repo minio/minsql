@@ -43,7 +43,8 @@ fn main() {
 
     info!("Starting MinSQL Server");
 
-    let addr = "0.0.0.0:9999".parse().unwrap();
+//    let addr = "0.0.0.0:9999".parse().unwrap();
+    let addr = configuration.server.as_ref().unwrap().address.as_ref().unwrap().parse().unwrap();
 
     hyper::rt::run(future::lazy(move || {
         // Share a `Client` with all `Service`s
