@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-#![deny(warnings)]
+//#![deny(warnings)]
 extern crate futures;
 extern crate hyper;
 #[macro_use]
@@ -24,6 +24,7 @@ extern crate pretty_env_logger;
 extern crate serde_derive;
 extern crate serde_json;
 extern crate toml;
+extern crate hyperscan;
 
 
 use std::process;
@@ -35,6 +36,7 @@ use hyper::service::service_fn;
 mod config;
 mod http;
 mod storage;
+mod query;
 
 
 fn main() {

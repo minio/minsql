@@ -64,6 +64,17 @@ pub struct LogAuth {
     pub status: String,
 }
 
+impl Config {
+    pub fn get_log(&self, logname: &String) -> Option<&Log> {
+        for log in &self.log {
+            if log.name == *logname {
+                return Some(log);
+            }
+        }
+        None
+    }
+}
+
 #[derive(Debug)]
 pub struct ConfigurationError {
     details: String
@@ -80,6 +91,7 @@ impl fmt::Display for ConfigurationError {
         write!(f, "{}", self.details)
     }
 }
+
 // Loads the configuration file from command arguments or defaults to config.toml
 pub fn load_configuration() -> Result<Config, ConfigurationError> {
     //load arguments

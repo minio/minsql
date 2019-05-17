@@ -164,8 +164,8 @@ pub fn write_to_datastore(logname: &str, datastore: &DataStore, payload: &String
             return Err(WriteDatastoreError::new(&format!("Could not write to datastore: {}", e)[..]));
         }
     };
-    let duration = start.elapsed();
 
+    let duration = start.elapsed();
     println!("Writing to minio: {:?}", duration);
     Ok(true)
 }

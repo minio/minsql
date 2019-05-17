@@ -20,6 +20,7 @@ use hyper::{Body, Chunk, Client, header, Method, Request, Response, StatusCode};
 use hyper::client::HttpConnector;
 
 use crate::config::Config;
+use crate::query::scanlog;
 use crate::storage::write_to_datastore;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
@@ -34,7 +35,7 @@ static NOTFOUND: &[u8] = b"Not Found";
 
 #[derive(Debug)]
 struct RequestedLog {
-    log: String,
+    name: String,
     method: String,
 }
 
@@ -73,7 +74,7 @@ fn requested_log_from_request(req: &Request<Body>) -> Result<RequestedLog, Reque
     }
     let logname = parts[0].to_string();
     let method = parts[1].to_string();
-    return Ok(RequestedLog { log: logname, method: method });
+    return Ok(RequestedLog { name: logname, method: method });
 }
 
 pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &Config) -> ResponseFuture {
@@ -94,7 +95,7 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
         }
     } else {
         //request path without the /
-        let logname = match requested_log_from_request(&req) {
+        let requested_log = match requested_log_from_request(&req) {
             Ok(ln) => ln,
             Err(e) => {
                 error!("Failed to load configuration: {}", e);
@@ -102,24 +103,21 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
             }
         };
 
-        // is this a valid logname? else reject
-        let mut found = false;
-        for log in &cfg.log {
-            if log.name == logname.log {
-                found = true;
+        // is this a valid requested_log? else reject
+        match cfg.get_log(&requested_log.name) {
+            Some(_) => {}, // if we get a log it's valid
+            _ => {
+                info!("Attemped access of unknow log {}", requested_log.name);
+                return return_404();
             }
         }
-        if found == false {
-            return return_404();
-        }
 
-
-        match (req.method(), &logname.method[..]) {
+        match (req.method(), &requested_log.method[..]) {
             (&Method::POST, "search") => {
-                api_post_response(req)
+                api_log_search(cfg, req)
             }
             (&Method::PUT, "store") => {
-                api_log_put_response(cfg, req)
+                api_log_store(cfg, req)
             }
             _ => {
                 // Return 404 not found response.
@@ -129,8 +127,8 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
     }
 }
 
-fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
-//    info!("Logging data");
+// Handles a PUT operation to a log
+fn api_log_store(cfg: &Config, req: Request<Body>) -> ResponseFuture {
     let requested_log = match requested_log_from_request(&req) {
         Ok(ln) => ln,
         Err(e) => {
@@ -149,7 +147,7 @@ fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                 Ok(str) => str,
                 Err(err) => panic!("Couldn't convert buffer to string: {}", err)
             };
-            match write_to_datastore(&requested_log.log, &cfg.datastore[0], &payload) {
+            match write_to_datastore(&requested_log.name, &cfg.datastore[0], &payload) {
                 Ok(x) => x,
                 Err(e) => {
                     error!("{}", e);
@@ -191,7 +189,27 @@ fn client_request_response(client: &Client<HttpConnector>) -> ResponseFuture {
     }))
 }
 
-fn api_post_response(req: Request<Body>) -> ResponseFuture {
+// performs a query on a log
+fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
+    let requested_log = match requested_log_from_request(&req) {
+        Ok(ln) => ln,
+        Err(e) => {
+            error!("{}", e);
+            return return_404();
+        }
+    };
+    let log = match cfg.get_log(&requested_log.name) {
+        Some(l) => l,
+        _ => {
+            error!("Tried to search an unknow log");
+            return return_404();
+        }
+    };
+
+    println!("found log {}",log.name);
+
+    scanlog();
+
     // A web api to run against
     Box::new(req.into_body()
         .concat2() // Concatenate all chunks in the body

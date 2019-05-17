@@ -21,3 +21,4 @@ rusoto_credential = "0.17.0"
 xml-rs = "0.8.0"
 chrono = "0.4.6"
 uuid = { version = "0.7", features = ["v4"] }
+hyperscan = "0.1.1"
