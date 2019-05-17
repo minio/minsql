@@ -1,3 +1,18 @@
+// MinSQL
+// Copyright (C) 2019  MinIO
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use std::fmt;
 
 use futures::{future, Future, Stream};
@@ -134,7 +149,7 @@ fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                 Ok(str) => str,
                 Err(err) => panic!("Couldn't convert buffer to string: {}", err)
             };
-            match write_to_datastore(&requested_log.log, &cfg.datastore[0], &payload)  {
+            match write_to_datastore(&requested_log.log, &cfg.datastore[0], &payload) {
                 Ok(x) => x,
                 Err(e) => {
                     error!("{}", e);
@@ -142,7 +157,7 @@ fn api_log_put_response(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                         .status(StatusCode::INSUFFICIENT_STORAGE)
                         .header(header::CONTENT_TYPE, "text/plain")
                         .body(Body::from("fail"))?;
-                    return Ok(response)
+                    return Ok(response);
                 }
             };
 
