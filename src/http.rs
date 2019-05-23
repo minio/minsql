@@ -14,14 +14,16 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt;
+use std::time::Instant;
 
 use futures::{future, Future, Stream};
 use hyper::{Body, Chunk, Client, header, Method, Request, Response, StatusCode};
 use hyper::client::HttpConnector;
+use regex::Regex;
 use sqlparser::sqlparser::Parser;
 use sqlparser::sqlparser::ParserError;
-use regex::Regex;
 
 use crate::config::Config;
 use crate::dialect::MinSQLDialect;
@@ -29,7 +31,6 @@ use crate::query::ScanFlags;
 use crate::query::scanlog;
 use crate::storage::{list_msl_bucket_files, write_to_datastore};
 use crate::storage::read_file;
-use std::collections::HashSet;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type ResponseFuture = Box<Future<Item=Response<Body>, Error=GenericError> + Send>;
@@ -121,6 +122,16 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
                 return_404_future()
             }
         }
+    } else if req.method() == &Method::POST {
+        match (req.method(), req.uri().path()) {
+            (&Method::POST, "/search") => {
+                api_log_search(cfg, req)
+            }
+            _ => {
+                // Return 404 not found response.
+                return_404_future()
+            }
+        }
     } else {
         //request path without the /
         let requested_log = match requested_log_from_request(&req) {
@@ -141,9 +152,6 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
         }
 
         match (req.method(), &requested_log.method[..]) {
-            (&Method::POST, "search") => {
-                api_log_search(cfg, req)
-            }
             (&Method::PUT, "store") => {
                 api_log_store(cfg, req)
             }
@@ -219,15 +227,7 @@ fn client_request_response(client: &Client<HttpConnector>) -> ResponseFuture {
 
 // performs a query on a log
 fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
-    // Validate we are being asked for an existing log
-    let requested_log = match requested_log_from_request(&req) {
-        Ok(ln) => ln,
-        Err(e) => {
-            error!("{}", e);
-            return return_404_future();
-        }
-    };
-
+    let start = Instant::now();
     lazy_static! {
         static ref SMART_FIELDS_RE : Regex = Regex::new(r"((\$(ip|email|date|url))([0-9]+)*)\b").unwrap();
     }
@@ -243,15 +243,6 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                 Ok(str) => str,
                 Err(err) => panic!("Couldn't convert buffer to string: {}", err)
             };
-            // We may be removing this soon
-            let log = match cfg.get_log(&requested_log.name) {
-                Some(l) => l,
-                _ => {
-                    error!("Tried to search an unknow log");
-                    return Ok(return_404());
-                }
-            };
-            println!("{}", log.name);
 
             // attempt to parse the payload
             let dialect = MinSQLDialect {};
@@ -275,6 +266,8 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                     return Ok(response);
                 }
             };
+
+            println!("AST: {:?}", ast);
 
             // Validate all the tables for all the queries, we don't want to start serving content
             // for the first query and then discover subsequent queries are invalid
@@ -323,7 +316,6 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                 };
             }
 
-            // TODO: We should stream the data out as it becomes available to save memory
             let mut resulting_data = String::new();
             // for each query, retrive data
             for query in &ast {
@@ -413,7 +405,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                 let mut smart_fields: Vec<SmartColumn> = Vec::new();
                 let mut smart_fields_set: HashSet<String> = HashSet::new();
                 let mut projections_ordered: Vec<String> = Vec::new();
-
+                // TODO: We should stream the data out as it becomes available to save memory
                 for proj in &projections {
                     match proj {
                         sqlparser::sqlast::SQLSelectItem::UnnamedExpression(ref ast) => {
@@ -458,7 +450,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                 }
 
                 // Build the parsing flags used by scanlog
-                let mut scan_flags:ScanFlags = ScanFlags::NONE;
+                let mut scan_flags: ScanFlags = ScanFlags::NONE;
                 for sfield_type in smart_fields_set {
                     let flag = match sfield_type.as_ref() {
                         "$ip" => ScanFlags::IP,
@@ -469,7 +461,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                     if scan_flags == ScanFlags::NONE {
                         scan_flags = flag;
                     } else {
-                        scan_flags = scan_flags|flag;
+                        scan_flags = scan_flags | flag;
                     }
                 }
 
@@ -508,55 +500,110 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                     resulting_data.push_str(line);
 //                                    resulting_data.push('\n');
                                 }
-                                let mut pos_values: HashMap<String, String> = HashMap::new();
+                                let mut projection_values: HashMap<String, String> = HashMap::new();
                                 // if we have position columns, process
                                 if positional_fields.len() > 0 {
                                     //TODO: Use separator construct from header
                                     let parts: Vec<&str> = line.split(" ").collect();
                                     for pos in &positional_fields {
                                         if pos.position - 1 < (parts.len() as i32) {
-                                            pos_values.insert(pos.alias.clone(), parts[(pos.position - 1) as usize].to_string());
-                                        }else {
-                                            pos_values.insert(pos.alias.clone(), "".to_string());
+                                            projection_values.insert(pos.alias.clone(), parts[(pos.position - 1) as usize].to_string());
+                                        } else {
+                                            projection_values.insert(pos.alias.clone(), "".to_string());
                                         }
                                     }
                                 }
-                                let mut smart_values: HashMap<String, String> = HashMap::new();
+//                                let mut smart_values: HashMap<String, String> = HashMap::new();
                                 if smart_fields.len() > 0 {
-                                    let found_vals = scanlog(&line.to_string(),scan_flags);
+                                    let found_vals = scanlog(&line.to_string(), scan_flags);
                                     for smt in &smart_fields {
                                         if found_vals.contains_key(&smt.typed[..]) {
                                             // if the requested position is available
                                             if smt.position - 1 < (found_vals[&smt.typed].len() as i32) {
-                                                smart_values.insert(smt.alias.clone(), found_vals[&smt.typed][(smt.position - 1) as usize].clone());
+                                                projection_values.insert(smt.alias.clone(), found_vals[&smt.typed][(smt.position - 1) as usize].clone());
                                             } else {
-                                                smart_values.insert(smt.alias.clone(), "".to_string());
+                                                projection_values.insert(smt.alias.clone(), "".to_string());
                                             }
-
                                         }
                                     }
                                 }
 
-                                // build the result
-                                // iterate over the ordered resulting projections
-                                let mut field_values: Vec<String> = Vec::new();
-                                for proj in &projections_ordered {
-                                    // check if it's in positionsals
-                                    if pos_values.contains_key(proj) {
-                                        field_values.push(pos_values[proj].clone());
+                                println!("projection_values: {:?}", projection_values);
+
+                                // filter the line
+                                let mut skip_line = false;
+                                match query {
+                                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
+                                        match q.body {
+                                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                                                let mut all_conditions_pass = true;
+                                                for slct in &bodyselect.selection {
+                                                    match slct {
+                                                        sqlparser::sqlast::ASTNode::SQLIsNotNull(ast) => {
+                                                            let identifier = match **ast {
+                                                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
+                                                                    identifier.to_string()
+                                                                }
+                                                                _ => {
+                                                                    // TODO: Should we be retunring anything at all?
+                                                                    "".to_string()
+                                                                }
+                                                            };
+                                                            if projection_values.contains_key(&identifier[..]) == false || projection_values[&identifier] == "" {
+                                                                all_conditions_pass = false;
+                                                            }
+                                                        },
+                                                        sqlparser::sqlast::ASTNode::SQLIsNull(ast) => {
+                                                            let identifier = match **ast {
+                                                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
+                                                                    identifier.to_string()
+                                                                }
+                                                                _ => {
+                                                                    // TODO: Should we be retunring anything at all?
+                                                                    "".to_string()
+                                                                }
+                                                            };
+                                                            if projection_values[&identifier] != "" {
+                                                                all_conditions_pass = false;
+                                                            }
+                                                        },
+                                                        _ => {
+                                                            info!("Unhandled operation");
+                                                        }
+                                                    }
+                                                }
+                                                if all_conditions_pass == false {
+                                                    skip_line = true;
+                                                }
+                                            }
+                                            _ => {}
+                                        }
                                     }
-                                    if smart_values.contains_key(proj) {
-                                        field_values.push(smart_values[proj].clone());
+                                    _ => {}
+                                };
+
+
+                                if skip_line == false {
+                                    // build the result
+                                    // iterate over the ordered resulting projections
+                                    let mut field_values: Vec<String> = Vec::new();
+                                    for proj in &projections_ordered {
+                                        // check if it's in positionsals
+                                        if projection_values.contains_key(proj) {
+                                            field_values.push(projection_values[proj].clone());
+                                        }
                                     }
+                                    // TODO: When adding CSV output, change the separator
+                                    resulting_data.push_str(&field_values.join(" ")[..]);
+                                    resulting_data.push('\n');
                                 }
-                                resulting_data.push_str(&field_values.join(" ")[..]);
-                                resulting_data.push('\n');
                             }
                         }
                     }
                 }
             }
-
+            let duration = start.elapsed();
+            info!("Search took: {:?}", duration);
             let response = Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "text/plain")
