@@ -14,22 +14,55 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use std::fmt;
+use std::io::Error as IoError;
 use std::time::Instant;
 
 use chrono::{Datelike, Timelike, Utc};
+//use chrono::DateTime;
 use futures::Future;
 use futures::future::FutureResult;
 use futures::future::result;
 use futures::Poll;
+use futures::stream::Stream;
 use rusoto_core::HttpClient;
 use rusoto_core::Region;
+use rusoto_core::RusotoError;
 use rusoto_credential::AwsCredentials;
 use rusoto_credential::CredentialsError;
 use rusoto_credential::ProvideAwsCredentials;
-use rusoto_s3::{ListObjectsRequest, PutObjectRequest, S3, S3Client};
+use rusoto_s3::{GetObjectError, GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3, S3Client};
 use uuid::Uuid;
 
 use crate::config::DataStore;
+
+//use rusoto_core::RusotoError;
+
+#[derive(Debug)]
+enum StorageError {
+    Get(GetObjectError),
+    Io(IoError),
+}
+
+impl From<GetObjectError> for StorageError {
+    fn from(err: GetObjectError) -> Self {
+        StorageError::Get(err)
+    }
+}
+
+impl From<RusotoError<GetObjectError>> for StorageError {
+    fn from(err: RusotoError<GetObjectError>) -> Self {
+        match err {
+            RusotoError::Service(e) => StorageError::Get(e),
+            _ => StorageError::Io(IoError::last_os_error())
+        }
+    }
+}
+
+impl From<IoError> for StorageError {
+    fn from(err: IoError) -> Self {
+        StorageError::Io(err)
+    }
+}
 
 // Our Credentials holder so we can use per-datasource credentials with rusoto
 #[derive(Debug)]
@@ -164,8 +197,67 @@ pub fn write_to_datastore(logname: &str, datastore: &DataStore, payload: &String
             return Err(WriteDatastoreError::new(&format!("Could not write to datastore: {}", e)[..]));
         }
     };
-
+    //TODO: Remove this metric
     let duration = start.elapsed();
     println!("Writing to minio: {:?}", duration);
     Ok(true)
+}
+
+
+#[derive(Debug)]
+pub struct ListMslFilesError {
+    details: String
+}
+
+impl ListMslFilesError {
+    pub fn new(msg: &str) -> ListMslFilesError {
+        ListMslFilesError { details: msg.to_string() }
+    }
+}
+
+impl fmt::Display for ListMslFilesError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+// List all the files for a bucket
+pub fn list_msl_bucket_files(logname: &str, datastore: &DataStore) -> Result<Vec<String>, ListMslFilesError> {
+    let s3_client = client_for_datastore(datastore);
+    let files = match s3_client.list_objects(ListObjectsRequest {
+        bucket: datastore.bucket.clone(),
+        prefix: Some(format!("minsql/{}", logname)),
+        ..Default::default()
+    }).sync() {
+        Ok(l) => l,
+        Err(e) => {
+            return Err(ListMslFilesError::new(&format!("Could not list files in datastore: {}", e)[..]));
+        }
+    };
+    let mut msl_files = Vec::new();
+    for file in files.contents.unwrap() {
+        msl_files.push(file.key.unwrap())
+    }
+    Ok(msl_files)
+}
+
+// Return the contents of a file from a datastore
+pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, ListMslFilesError> {
+    let s3_client = client_for_datastore(datastore);
+    let files = match s3_client.get_object(GetObjectRequest {
+        bucket: datastore.bucket.clone(),
+        key: key.clone(),
+        ..Default::default()
+    }).sync() {
+        Ok(l) => l,
+        Err(e) => {
+            return Err(ListMslFilesError::new(&format!("Could not list files in datastore: {}", e)[..]));
+        }
+    };
+
+    let stream = files.body.unwrap();
+    let bytes = stream.concat2().wait().unwrap();
+    let body = String::from_utf8(bytes).unwrap();
+
+    Ok(body)
 }

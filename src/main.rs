@@ -25,18 +25,23 @@ extern crate serde_derive;
 extern crate serde_json;
 extern crate toml;
 extern crate hyperscan;
-
+#[macro_use] extern crate lazy_static;
+#[macro_use] extern crate bitflags;
 
 use std::process;
 
 use futures::{future, Future};
 use hyper::{Client, Server};
 use hyper::service::service_fn;
+use std::sync::Arc;
 
+mod constants;
 mod config;
 mod http;
 mod storage;
 mod query;
+mod dialect;
+
 
 
 fn main() {
@@ -64,6 +69,8 @@ fn main() {
 //    let addr = "0.0.0.0:9999".parse().unwrap();
     let addr = configuration.server.as_ref().unwrap().address.as_ref().unwrap().parse().unwrap();
 
+    let cfg = Arc::new(configuration);
+
     hyper::rt::run(future::lazy(move || {
         // Share a `Client` with all `Service`s
         let client = Client::new();
@@ -72,7 +79,7 @@ fn main() {
             // Move a clone of `client` into the `service_fn`.
             let client = client.clone();
             // Move a clone of `configuration` into the `service_fn`.
-            let cfg = configuration.clone();
+            let cfg = cfg.clone();
 
             service_fn(move |req| {
                 http::request_router(req, &client, &cfg)

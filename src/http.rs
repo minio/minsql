@@ -13,15 +13,23 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
+use std::collections::HashMap;
 use std::fmt;
 
 use futures::{future, Future, Stream};
 use hyper::{Body, Chunk, Client, header, Method, Request, Response, StatusCode};
 use hyper::client::HttpConnector;
+use sqlparser::sqlparser::Parser;
+use sqlparser::sqlparser::ParserError;
+use regex::Regex;
 
 use crate::config::Config;
+use crate::dialect::MinSQLDialect;
+use crate::query::ScanFlags;
 use crate::query::scanlog;
-use crate::storage::write_to_datastore;
+use crate::storage::{list_msl_bucket_files, write_to_datastore};
+use crate::storage::read_file;
+use std::collections::HashSet;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type ResponseFuture = Box<Future<Item=Response<Body>, Error=GenericError> + Send>;
@@ -32,6 +40,22 @@ static POST_DATA: &str = r#"{"original": "data"}"#;
 
 static INDEX: &[u8] = b"MinSQL";
 static NOTFOUND: &[u8] = b"Not Found";
+
+#[derive(Debug)]
+struct PositionalColumn {
+    position: i32,
+    alias: String,
+}
+
+#[derive(Debug)]
+struct SmartColumn {
+    // $ip, $email...
+    typed: String,
+    // for $ip or $ip1 is 1, for $ip2 is 2 ...
+    position: i32,
+    // if this column was aliased
+    alias: String,
+}
 
 #[derive(Debug)]
 struct RequestedLog {
@@ -56,13 +80,17 @@ impl fmt::Display for RequestedLogError {
     }
 }
 
-// Return 404 not found response.
-fn return_404() -> ResponseFuture {
+fn return_404() -> Response<Body> {
     let body = Body::from(NOTFOUND);
-    Box::new(future::ok(Response::builder()
+    Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(body)
-        .unwrap()))
+        .unwrap()
+}
+
+// Return 404 not found response.
+fn return_404_future() -> ResponseFuture {
+    Box::new(future::ok(return_404()))
 }
 
 fn requested_log_from_request(req: &Request<Body>) -> Result<RequestedLog, RequestedLogError> {
@@ -90,7 +118,7 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
             }
             _ => {
                 // Return 404 not found response.
-                return_404()
+                return_404_future()
             }
         }
     } else {
@@ -99,16 +127,16 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
             Ok(ln) => ln,
             Err(e) => {
                 error!("Failed to load configuration: {}", e);
-                return return_404();
+                return return_404_future();
             }
         };
 
         // is this a valid requested_log? else reject
         match cfg.get_log(&requested_log.name) {
-            Some(_) => {}, // if we get a log it's valid
+            Some(_) => {} // if we get a log it's valid
             _ => {
                 info!("Attemped access of unknow log {}", requested_log.name);
-                return return_404();
+                return return_404_future();
             }
         }
 
@@ -121,7 +149,7 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
             }
             _ => {
                 // Return 404 not found response.
-                return return_404();
+                return return_404_future();
             }
         }
     }
@@ -133,7 +161,7 @@ fn api_log_store(cfg: &Config, req: Request<Body>) -> ResponseFuture {
         Ok(ln) => ln,
         Err(e) => {
             error!("{}", e);
-            return return_404();
+            return return_404_future();
         }
     };
     // make a clone of the config for the closure
@@ -191,39 +219,348 @@ fn client_request_response(client: &Client<HttpConnector>) -> ResponseFuture {
 
 // performs a query on a log
 fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
+    // Validate we are being asked for an existing log
     let requested_log = match requested_log_from_request(&req) {
         Ok(ln) => ln,
         Err(e) => {
             error!("{}", e);
-            return return_404();
-        }
-    };
-    let log = match cfg.get_log(&requested_log.name) {
-        Some(l) => l,
-        _ => {
-            error!("Tried to search an unknow log");
-            return return_404();
+            return return_404_future();
         }
     };
 
-    println!("found log {}",log.name);
+    lazy_static! {
+        static ref SMART_FIELDS_RE : Regex = Regex::new(r"((\$(ip|email|date|url))([0-9]+)*)\b").unwrap();
+    }
 
-    scanlog();
-
+    // make a clone of the config for the closure
+    let cfg = cfg.clone();
     // A web api to run against
     Box::new(req.into_body()
         .concat2() // Concatenate all chunks in the body
         .from_err()
-        .and_then(|entire_body| {
-            // TODO: Replace all unwraps with proper error handling
-            let str = String::from_utf8(entire_body.to_vec())?;
-            let mut data: serde_json::Value = serde_json::from_str(&str)?;
-            data["test"] = serde_json::Value::from("test_value");
-            let json = serde_json::to_string(&data)?;
+        .and_then(move |entire_body| {
+            let payload: String = match String::from_utf8(entire_body.to_vec()) {
+                Ok(str) => str,
+                Err(err) => panic!("Couldn't convert buffer to string: {}", err)
+            };
+            // We may be removing this soon
+            let log = match cfg.get_log(&requested_log.name) {
+                Some(l) => l,
+                _ => {
+                    error!("Tried to search an unknow log");
+                    return Ok(return_404());
+                }
+            };
+            println!("{}", log.name);
+
+            // attempt to parse the payload
+            let dialect = MinSQLDialect {};
+            let ast = match Parser::parse_sql(&dialect, payload.clone()) {
+                Ok(q) => q,
+                Err(e) => {
+                    // Unable to parse query, match reason
+                    match e {
+                        ParserError::TokenizerError(s) => {
+                            error!("Failed to tokenize query `{}`: {}", payload.clone(), s);
+                        }
+                        ParserError::ParserError(s) => {
+                            error!("Failed to parse query `{}`: {}", payload.clone(), s);
+                        }
+                    }
+                    // TODO: Design a more informative error message
+                    let response = Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header(header::CONTENT_TYPE, "text/plain")
+                        .body(Body::from("Cannot parse query"))?;
+                    return Ok(response);
+                }
+            };
+
+            // Validate all the tables for all the queries, we don't want to start serving content
+            // for the first query and then discover subsequent queries are invalid
+            for query in &ast {
+                // find the table they want to query
+                let some_table = match query {
+                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
+                        match q.body {
+                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                                bodyselect.relation.clone()
+                            }
+                            _ => {
+                                error!("No table found");
+                                let response = Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .header(header::CONTENT_TYPE, "text/plain")
+                                    .body(Body::from("fail"))?;
+                                return Ok(response);
+                            }
+                        }
+                    }
+                    _ => {
+                        error!("Not the type of query we support");
+                        let response = Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .header(header::CONTENT_TYPE, "text/plain")
+                            .body(Body::from("Unsupported query"))?;
+                        return Ok(response);
+                    }
+                };
+                if some_table == None {
+                    error!("No table found");
+                    let response = Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header(header::CONTENT_TYPE, "text/plain")
+                        .body(Body::from("No table was found in the query statement"))?;
+                    return Ok(response);
+                }
+                let table = some_table.unwrap().to_string();
+                match cfg.get_log(&table) {
+                    Some(_) => (),
+                    _ => {
+                        error!("Tried to search an unknow log");
+                        return Ok(return_404());
+                    }
+                };
+            }
+
+            // TODO: We should stream the data out as it becomes available to save memory
+            let mut resulting_data = String::new();
+            // for each query, retrive data
+            for query in &ast {
+                // find the table they want to query
+                let some_table = match query {
+                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
+                        match q.body {
+                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                                bodyselect.relation.clone()
+                            }
+                            _ => {
+                                error!("No table found");
+                                let response = Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .header(header::CONTENT_TYPE, "text/plain")
+                                    .body(Body::from("fail"))?;
+                                return Ok(response);
+                            }
+                        }
+                    }
+                    _ => {
+                        error!("Not the type of query we support");
+                        let response = Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .header(header::CONTENT_TYPE, "text/plain")
+                            .body(Body::from("Unsupported query"))?;
+                        return Ok(response);
+                    }
+                };
+                if some_table == None {
+                    error!("No table found");
+                    let response = Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header(header::CONTENT_TYPE, "text/plain")
+                        .body(Body::from("No table was found in the query statement"))?;
+                    return Ok(response);
+                }
+                let table = some_table.unwrap().to_string();
+                let log = match cfg.get_log(&table) {
+                    Some(l) => l,
+                    _ => {
+                        error!("Tried to search an unknow log");
+                        return Ok(return_404());
+                    }
+                };
+
+                // determine our read strategy
+                let read_all = match query {
+                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
+                        match q.body {
+                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                                let mut is_wildcard = false;
+                                for projection in &bodyselect.projection {
+                                    if *projection == sqlparser::sqlast::SQLSelectItem::Wildcard {
+                                        is_wildcard = true
+                                    }
+                                }
+                                is_wildcard
+                            }
+                            _ => {
+                                false
+                            }
+                        }
+                    }
+                    _ => {
+                        false
+                    }
+                };
+
+                let projections = match query {
+                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
+                        match q.body {
+                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                                bodyselect.projection.clone()
+                            }
+                            _ => {
+                                Vec::new() //return empty
+                            }
+                        }
+                    }
+                    _ => {
+                        Vec::new() //return empty
+                    }
+                };
+
+                let mut positional_fields: Vec<PositionalColumn> = Vec::new();
+                let mut smart_fields: Vec<SmartColumn> = Vec::new();
+                let mut smart_fields_set: HashSet<String> = HashSet::new();
+                let mut projections_ordered: Vec<String> = Vec::new();
+
+                for proj in &projections {
+                    match proj {
+                        sqlparser::sqlast::SQLSelectItem::UnnamedExpression(ref ast) => {
+                            // we have an identifier
+                            match ast {
+                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
+                                    let id_name = &identifier[1..];
+                                    let position = match id_name.parse::<i32>() {
+                                        Ok(p) => p,
+                                        Err(_) => -1
+                                    };
+                                    // if we were able to parse identifier as an i32 it's a positional
+                                    if position > 0 {
+                                        positional_fields.push(PositionalColumn { position: position, alias: identifier.clone() });
+                                        projections_ordered.push(identifier.clone());
+                                    } else {
+                                        // try to parse as as smart field
+                                        for sfield in SMART_FIELDS_RE.captures_iter(identifier) {
+                                            let typed = sfield[2].to_string();
+                                            let mut pos = 1;
+                                            if sfield.get(4).is_none() == false {
+                                                pos = match sfield[4].parse::<i32>() {
+                                                    Ok(p) => p,
+                                                    // technically this should never happen as the regex already validated an integer
+                                                    Err(_) => -1,
+                                                };
+                                            }
+                                            // we use this set to keep track of active smart fields
+                                            smart_fields_set.insert(typed.clone());
+                                            // track the smartfield
+                                            smart_fields.push(SmartColumn { typed: typed.clone(), position: pos, alias: identifier.clone() });
+                                            // record the order or extraction
+                                            projections_ordered.push(identifier.clone());
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {} // for now let's not do anything on other Variances
+                    }
+                }
+
+                // Build the parsing flags used by scanlog
+                let mut scan_flags:ScanFlags = ScanFlags::NONE;
+                for sfield_type in smart_fields_set {
+                    let flag = match sfield_type.as_ref() {
+                        "$ip" => ScanFlags::IP,
+                        "$email" => ScanFlags::EMAIL,
+                        "$data" => ScanFlags::DATE,
+                        _ => ScanFlags::NONE,
+                    };
+                    if scan_flags == ScanFlags::NONE {
+                        scan_flags = flag;
+                    } else {
+                        scan_flags = scan_flags|flag;
+                    }
+                }
+
+                // search across all datastores
+                for ds in &cfg.datastore {
+                    let msl_files = match list_msl_bucket_files(&log.name[..], ds) {
+                        Ok(mf) => mf,
+                        Err(e) => {
+                            error!("Problem listing msl files {}", e);
+                            let response = Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .header(header::CONTENT_TYPE, "text/plain")
+                                .body(Body::from("fail"))?;
+                            return Ok(response);
+                        }
+                    };
+                    // for each file found inside the log
+                    for f in msl_files {
+                        // filter only files with msl extension
+                        if f.contains(".msl") {
+                            let lines = match read_file(&f, ds) {
+                                Ok(l) => l,
+                                Err(e) => {
+                                    error!("problem reading file {}", e);
+                                    let response = Response::builder()
+                                        .status(StatusCode::BAD_REQUEST)
+                                        .header(header::CONTENT_TYPE, "text/plain")
+                                        .body(Body::from("fail"))?;
+                                    return Ok(response);
+                                }
+                            };
+                            // process lines
+                            let individual_lines = lines.split("\n");
+                            for line in individual_lines {
+                                if read_all {
+                                    resulting_data.push_str(line);
+//                                    resulting_data.push('\n');
+                                }
+                                let mut pos_values: HashMap<String, String> = HashMap::new();
+                                // if we have position columns, process
+                                if positional_fields.len() > 0 {
+                                    //TODO: Use separator construct from header
+                                    let parts: Vec<&str> = line.split(" ").collect();
+                                    for pos in &positional_fields {
+                                        if pos.position - 1 < (parts.len() as i32) {
+                                            pos_values.insert(pos.alias.clone(), parts[(pos.position - 1) as usize].to_string());
+                                        }else {
+                                            pos_values.insert(pos.alias.clone(), "".to_string());
+                                        }
+                                    }
+                                }
+                                let mut smart_values: HashMap<String, String> = HashMap::new();
+                                if smart_fields.len() > 0 {
+                                    let found_vals = scanlog(&line.to_string(),scan_flags);
+                                    for smt in &smart_fields {
+                                        if found_vals.contains_key(&smt.typed[..]) {
+                                            // if the requested position is available
+                                            if smt.position - 1 < (found_vals[&smt.typed].len() as i32) {
+                                                smart_values.insert(smt.alias.clone(), found_vals[&smt.typed][(smt.position - 1) as usize].clone());
+                                            } else {
+                                                smart_values.insert(smt.alias.clone(), "".to_string());
+                                            }
+
+                                        }
+                                    }
+                                }
+
+                                // build the result
+                                // iterate over the ordered resulting projections
+                                let mut field_values: Vec<String> = Vec::new();
+                                for proj in &projections_ordered {
+                                    // check if it's in positionsals
+                                    if pos_values.contains_key(proj) {
+                                        field_values.push(pos_values[proj].clone());
+                                    }
+                                    if smart_values.contains_key(proj) {
+                                        field_values.push(smart_values[proj].clone());
+                                    }
+                                }
+                                resulting_data.push_str(&field_values.join(" ")[..]);
+                                resulting_data.push('\n');
+                            }
+                        }
+                    }
+                }
+            }
+
             let response = Response::builder()
                 .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json))?;
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from(resulting_data))?;
             Ok(response)
         })
     )
