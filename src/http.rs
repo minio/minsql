@@ -22,11 +22,9 @@ use futures::{future, Future, Stream};
 use hyper::{Body, Chunk, Client, header, Method, Request, Response, StatusCode};
 use hyper::client::HttpConnector;
 use regex::Regex;
-use sqlparser::sqlparser::Parser;
-use sqlparser::sqlparser::ParserError;
 
 use crate::config::Config;
-use crate::dialect::MinSQLDialect;
+use crate::query::parse_query;
 use crate::query::ScanFlags;
 use crate::query::scanlog;
 use crate::storage::{list_msl_bucket_files, write_to_datastore};
@@ -230,7 +228,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
     let start = Instant::now();
     lazy_static! {
         static ref SMART_FIELDS_RE : Regex = Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
-    }
+    };
 
     // make a clone of the config for the closure
     let cfg = cfg.clone();
@@ -238,37 +236,14 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
     Box::new(req.into_body()
         .concat2() // Concatenate all chunks in the body
         .from_err()
-        .and_then(move |entire_body| {
-            let payload: String = match String::from_utf8(entire_body.to_vec()) {
-                Ok(str) => str,
-                Err(err) => panic!("Couldn't convert buffer to string: {}", err)
-            };
-
-            // attempt to parse the payload
-            let dialect = MinSQLDialect {};
-            let ast = match Parser::parse_sql(&dialect, payload.clone()) {
-                Ok(q) => q,
-                Err(e) => {
-                    // Unable to parse query, match reason
-                    match e {
-                        ParserError::TokenizerError(s) => {
-                            error!("Failed to tokenize query `{}`: {}", payload.clone(), s);
-                        }
-                        ParserError::ParserError(s) => {
-                            error!("Failed to parse query `{}`: {}", payload.clone(), s);
-                        }
-                    }
-                    // TODO: Design a more informative error message
-                    let response = Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .header(header::CONTENT_TYPE, "text/plain")
-                        .body(Body::from("Cannot parse query"))?;
-                    return Ok(response);
-                }
-            };
-
-//            println!("AST: {:?}", ast);
-
+        .and_then(parse_query)
+//        .from_err()
+        .map_err(|e| {
+            error!("----{}",e);
+            e
+        })
+        .and_then(move |ast| {
+            println!("AST: {:?}", ast);
             // Validate all the tables for all the queries, we don't want to start serving content
             // for the first query and then discover subsequent queries are invalid
             for query in &ast {
@@ -493,8 +468,6 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                                     smart_fields.push(SmartColumn { typed: typed.clone(), position: pos, alias: identifier.clone() });
                                                 }
                                             }
-
-
                                         }
                                         sqlparser::sqlast::ASTNode::SQLIsNull(ast) => {
                                             let identifier = match **ast {
@@ -534,7 +507,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                                 }
                                             }
                                         }
-                                        sqlparser::sqlast::ASTNode::SQLBinaryExpr { left, op: _, right:_ } => {
+                                        sqlparser::sqlast::ASTNode::SQLBinaryExpr { left, op: _, right: _ } => {
                                             let identifier = left.to_string();
 
                                             //positional or smart?
@@ -728,7 +701,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                                                     if projection_values.contains_key(&identifier[..]) && projection_values[&identifier] != op_value {
                                                                         all_conditions_pass = false;
                                                                     }
-                                                                },
+                                                                }
                                                                 sqlparser::sqlast::SQLOperator::NotEq => {
                                                                     // TODO: Optimize this op_value preparation, don't do it in the loop
                                                                     let op_value = match **right {
@@ -753,7 +726,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                                                     if projection_values.contains_key(&identifier[..]) && projection_values[&identifier] == op_value {
                                                                         all_conditions_pass = false;
                                                                     }
-                                                                },
+                                                                }
                                                                 sqlparser::sqlast::SQLOperator::Like => {
                                                                     // TODO: Optimize this op_value preparation, don't do it in the loop
                                                                     let op_value = match **right {
@@ -777,7 +750,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                                                     };
                                                                     // TODO: Add support for wildcards ie: LIKE 'server_.domain.com' where _ is a single character wildcard
                                                                     if identifier == "$line" {
-                                                                        if line.contains(&op_value[..]) == false{
+                                                                        if line.contains(&op_value[..]) == false {
                                                                             all_conditions_pass = false;
                                                                         }
                                                                     } else {
@@ -785,7 +758,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                                                             all_conditions_pass = false;
                                                                         }
                                                                     }
-                                                                },
+                                                                }
                                                                 _ => {
                                                                     info!("Unhandled operator");
                                                                 }
