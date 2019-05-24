@@ -449,6 +449,134 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                     }
                 }
 
+                // see which fields in the conditions were not requested in the projections and extract them too
+                match query {
+                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
+                        match q.body {
+                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                                for slct in &bodyselect.selection {
+                                    match slct {
+                                        sqlparser::sqlast::ASTNode::SQLIsNotNull(ast) => {
+                                            let identifier = match **ast {
+                                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
+                                                    identifier.to_string()
+                                                }
+                                                _ => {
+                                                    // TODO: Should we be retunring anything at all?
+                                                    "".to_string()
+                                                }
+                                            };
+                                            //positional or smart?
+                                            let id_name = &identifier[1..];
+                                            let position = match id_name.parse::<i32>() {
+                                                Ok(p) => p,
+                                                Err(_) => -1
+                                            };
+                                            // if we were able to parse identifier as an i32 it's a positional
+                                            if position > 0 {
+                                                positional_fields.push(PositionalColumn { position: position, alias: identifier.clone() });
+                                            } else {
+                                                // try to parse as as smart field
+                                                for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
+                                                    let typed = sfield[2].to_string();
+                                                    let mut pos = 1;
+                                                    if sfield.get(4).is_none() == false {
+                                                        pos = match sfield[4].parse::<i32>() {
+                                                            Ok(p) => p,
+                                                            // technically this should never happen as the regex already validated an integer
+                                                            Err(_) => -1,
+                                                        };
+                                                    }
+                                                    // we use this set to keep track of active smart fields
+                                                    smart_fields_set.insert(typed.clone());
+                                                    // track the smartfield
+                                                    smart_fields.push(SmartColumn { typed: typed.clone(), position: pos, alias: identifier.clone() });
+                                                }
+                                            }
+
+
+                                        }
+                                        sqlparser::sqlast::ASTNode::SQLIsNull(ast) => {
+                                            let identifier = match **ast {
+                                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
+                                                    identifier.to_string()
+                                                }
+                                                _ => {
+                                                    // TODO: Should we be retunring anything at all?
+                                                    "".to_string()
+                                                }
+                                            };
+                                            //positional or smart?
+                                            let id_name = &identifier[1..];
+                                            let position = match id_name.parse::<i32>() {
+                                                Ok(p) => p,
+                                                Err(_) => -1
+                                            };
+                                            // if we were able to parse identifier as an i32 it's a positional
+                                            if position > 0 {
+                                                positional_fields.push(PositionalColumn { position: position, alias: identifier.clone() });
+                                            } else {
+                                                // try to parse as as smart field
+                                                for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
+                                                    let typed = sfield[2].to_string();
+                                                    let mut pos = 1;
+                                                    if sfield.get(4).is_none() == false {
+                                                        pos = match sfield[4].parse::<i32>() {
+                                                            Ok(p) => p,
+                                                            // technically this should never happen as the regex already validated an integer
+                                                            Err(_) => -1,
+                                                        };
+                                                    }
+                                                    // we use this set to keep track of active smart fields
+                                                    smart_fields_set.insert(typed.clone());
+                                                    // track the smartfield
+                                                    smart_fields.push(SmartColumn { typed: typed.clone(), position: pos, alias: identifier.clone() });
+                                                }
+                                            }
+                                        }
+                                        sqlparser::sqlast::ASTNode::SQLBinaryExpr { left, op: _, right:_ } => {
+                                            let identifier = left.to_string();
+
+                                            //positional or smart?
+                                            let id_name = &identifier[1..];
+                                            let position = match id_name.parse::<i32>() {
+                                                Ok(p) => p,
+                                                Err(_) => -1
+                                            };
+                                            // if we were able to parse identifier as an i32 it's a positional
+                                            if position > 0 {
+                                                positional_fields.push(PositionalColumn { position: position, alias: identifier.clone() });
+                                            } else {
+                                                // try to parse as as smart field
+                                                for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
+                                                    let typed = sfield[2].to_string();
+                                                    let mut pos = 1;
+                                                    if sfield.get(4).is_none() == false {
+                                                        pos = match sfield[4].parse::<i32>() {
+                                                            Ok(p) => p,
+                                                            // technically this should never happen as the regex already validated an integer
+                                                            Err(_) => -1,
+                                                        };
+                                                    }
+                                                    // we use this set to keep track of active smart fields
+                                                    smart_fields_set.insert(typed.clone());
+                                                    // track the smartfield
+                                                    smart_fields.push(SmartColumn { typed: typed.clone(), position: pos, alias: identifier.clone() });
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            info!("Unhandled operation");
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                };
+
                 // Build the parsing flags used by scanlog
                 let mut scan_flags: ScanFlags = ScanFlags::NONE;
                 for sfield_type in smart_fields_set {
@@ -496,10 +624,6 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                             // process lines
                             let individual_lines = lines.split("\n");
                             for line in individual_lines {
-                                if read_all {
-                                    resulting_data.push_str(line);
-//                                    resulting_data.push('\n');
-                                }
                                 let mut projection_values: HashMap<String, String> = HashMap::new();
                                 // if we have position columns, process
                                 if positional_fields.len() > 0 {
@@ -528,7 +652,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                     }
                                 }
 
-                                println!("projection_values: {:?}", projection_values);
+//                                println!("projection_values: {:?}", projection_values);
 
                                 // filter the line
                                 let mut skip_line = false;
@@ -552,7 +676,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                                             if projection_values.contains_key(&identifier[..]) == false || projection_values[&identifier] == "" {
                                                                 all_conditions_pass = false;
                                                             }
-                                                        },
+                                                        }
                                                         sqlparser::sqlast::ASTNode::SQLIsNull(ast) => {
                                                             let identifier = match **ast {
                                                                 sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
@@ -566,7 +690,99 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                                             if projection_values[&identifier] != "" {
                                                                 all_conditions_pass = false;
                                                             }
-                                                        },
+                                                        }
+                                                        sqlparser::sqlast::ASTNode::SQLBinaryExpr { left, op, right } => {
+                                                            let identifier = left.to_string();
+
+                                                            match op {
+                                                                sqlparser::sqlast::SQLOperator::Eq => {
+                                                                    // TODO: Optimize this op_value preparation, don't do it in the loop
+                                                                    let op_value = match **right {
+                                                                        sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
+                                                                            // Did they used double quotes for the value?
+                                                                            let mut str_id = right_value.to_string();
+                                                                            if str_id.starts_with("\"") {
+                                                                                str_id = str_id[1..][..str_id.len() - 2].to_string();
+                                                                            }
+                                                                            str_id
+                                                                        }
+                                                                        sqlparser::sqlast::ASTNode::SQLValue(ref right_value) => {
+                                                                            match right_value {
+                                                                                sqlparser::sqlast::Value::SingleQuotedString(s) => { s.to_string() }
+                                                                                _ => { right_value.to_string() }
+                                                                            }
+                                                                        }
+                                                                        _ => {
+                                                                            "".to_string()
+                                                                        }
+                                                                    };
+
+                                                                    if projection_values.contains_key(&identifier[..]) && projection_values[&identifier] != op_value {
+                                                                        all_conditions_pass = false;
+                                                                    }
+                                                                },
+                                                                sqlparser::sqlast::SQLOperator::NotEq => {
+                                                                    // TODO: Optimize this op_value preparation, don't do it in the loop
+                                                                    let op_value = match **right {
+                                                                        sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
+                                                                            // Did they used double quotes for the value?
+                                                                            let mut str_id = right_value.to_string();
+                                                                            if str_id.starts_with("\"") {
+                                                                                str_id = str_id[1..][..str_id.len() - 2].to_string();
+                                                                            }
+                                                                            str_id
+                                                                        }
+                                                                        sqlparser::sqlast::ASTNode::SQLValue(ref right_value) => {
+                                                                            match right_value {
+                                                                                sqlparser::sqlast::Value::SingleQuotedString(s) => { s.to_string() }
+                                                                                _ => { right_value.to_string() }
+                                                                            }
+                                                                        }
+                                                                        _ => {
+                                                                            "".to_string()
+                                                                        }
+                                                                    };
+                                                                    if projection_values.contains_key(&identifier[..]) && projection_values[&identifier] == op_value {
+                                                                        all_conditions_pass = false;
+                                                                    }
+                                                                },
+                                                                sqlparser::sqlast::SQLOperator::Like => {
+                                                                    // TODO: Optimize this op_value preparation, don't do it in the loop
+                                                                    let op_value = match **right {
+                                                                        sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
+                                                                            // Did they used double quotes for the value?
+                                                                            let mut str_id = right_value.to_string();
+                                                                            if str_id.starts_with("\"") {
+                                                                                str_id = str_id[1..][..str_id.len() - 2].to_string();
+                                                                            }
+                                                                            str_id
+                                                                        }
+                                                                        sqlparser::sqlast::ASTNode::SQLValue(ref right_value) => {
+                                                                            match right_value {
+                                                                                sqlparser::sqlast::Value::SingleQuotedString(s) => { s.to_string() }
+                                                                                _ => { right_value.to_string() }
+                                                                            }
+                                                                        }
+                                                                        _ => {
+                                                                            "".to_string()
+                                                                        }
+                                                                    };
+                                                                    // TODO: Add support for wildcards ie: LIKE 'server_.domain.com' where _ is a single character wildcard
+                                                                    if identifier == "$line" {
+                                                                        if line.contains(&op_value[..]) == false{
+                                                                            all_conditions_pass = false;
+                                                                        }
+                                                                    } else {
+                                                                        if projection_values.contains_key(&identifier[..]) && projection_values[&identifier].contains(&op_value[..]) == false {
+                                                                            all_conditions_pass = false;
+                                                                        }
+                                                                    }
+                                                                },
+                                                                _ => {
+                                                                    info!("Unhandled operator");
+                                                                }
+                                                            }
+                                                        }
                                                         _ => {
                                                             info!("Unhandled operation");
                                                         }
@@ -582,20 +798,24 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                                     _ => {}
                                 };
 
-
                                 if skip_line == false {
-                                    // build the result
-                                    // iterate over the ordered resulting projections
-                                    let mut field_values: Vec<String> = Vec::new();
-                                    for proj in &projections_ordered {
-                                        // check if it's in positionsals
-                                        if projection_values.contains_key(proj) {
-                                            field_values.push(projection_values[proj].clone());
+                                    if read_all {
+                                        resulting_data.push_str(line);
+                                        resulting_data.push('\n');
+                                    } else {
+                                        // build the result
+                                        // iterate over the ordered resulting projections
+                                        let mut field_values: Vec<String> = Vec::new();
+                                        for proj in &projections_ordered {
+                                            // check if it's in positionsals
+                                            if projection_values.contains_key(proj) {
+                                                field_values.push(projection_values[proj].clone());
+                                            }
                                         }
+                                        // TODO: When adding CSV output, change the separator
+                                        resulting_data.push_str(&field_values.join(" ")[..]);
+                                        resulting_data.push('\n');
                                     }
-                                    // TODO: When adding CSV output, change the separator
-                                    resulting_data.push_str(&field_values.join(" ")[..]);
-                                    resulting_data.push('\n');
                                 }
                             }
                         }
