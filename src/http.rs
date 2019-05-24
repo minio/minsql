@@ -229,7 +229,7 @@ fn client_request_response(client: &Client<HttpConnector>) -> ResponseFuture {
 fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
     let start = Instant::now();
     lazy_static! {
-        static ref SMART_FIELDS_RE : Regex = Regex::new(r"((\$(ip|email|date|url))([0-9]+)*)\b").unwrap();
+        static ref SMART_FIELDS_RE : Regex = Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
     }
 
     // make a clone of the config for the closure
@@ -267,7 +267,7 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                 }
             };
 
-            println!("AST: {:?}", ast);
+//            println!("AST: {:?}", ast);
 
             // Validate all the tables for all the queries, we don't want to start serving content
             // for the first query and then discover subsequent queries are invalid
@@ -583,7 +583,9 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                     let flag = match sfield_type.as_ref() {
                         "$ip" => ScanFlags::IP,
                         "$email" => ScanFlags::EMAIL,
-                        "$data" => ScanFlags::DATE,
+                        "$date" => ScanFlags::DATE,
+                        "$quoted" => ScanFlags::QUOTED,
+                        "$url" => ScanFlags::URL,
                         _ => ScanFlags::NONE,
                     };
                     if scan_flags == ScanFlags::NONE {
@@ -592,6 +594,12 @@ fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
                         scan_flags = scan_flags | flag;
                     }
                 }
+//                println!("flags: {:?}", scan_flags);
+//
+//                println!("Read all: {}", read_all);
+//                println!("Positionals : {:?}", positional_fields);
+//                println!("Smarts : {:?}", smart_fields);
+//                println!("ordered  : {:?}", projections_ordered);
 
                 // search across all datastores
                 for ds in &cfg.datastore {

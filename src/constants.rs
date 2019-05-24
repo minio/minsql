@@ -14,7 +14,9 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-// Smart Field IP
+// Smart Fields
 pub const SF_IP: &str = "$ip";
 pub const SF_EMAIL: &str = "$email";
 pub const SF_DATE: &str = "$date";
+pub const SF_QUOTED: &str = "$quoted";
+pub const SF_URL: &str = "$url";
