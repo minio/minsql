@@ -24,6 +24,7 @@ use sqlparser::sqlast::SQLStatement;
 use sqlparser::sqlparser::Parser;
 use sqlparser::sqlparser::ParserError;
 
+use crate::config::Config;
 use crate::constants::SF_DATE;
 use crate::constants::SF_EMAIL;
 use crate::constants::SF_IP;
@@ -96,6 +97,42 @@ pub fn parse_query(entire_body: Chunk) -> FutureResult<Vec<SQLStatement>, Generi
             futures::future::err::<Vec<SQLStatement>, GenericError>(ParseSqlError.into())
         }
     }
+}
+
+pub fn validate_logs(cfg: &Config, ast: Vec<SQLStatement>) -> FutureResult<Vec<SQLStatement>, GenericError> {
+
+    // Validate all the tables for all the queries, we don't want to start serving content
+    // for the first query and then discover subsequent queries are invalid
+    for query in &ast {
+        // find the table they want to query
+        let some_table = match query {
+            sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
+                match q.body {
+                    sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                        bodyselect.relation.clone()
+                    }
+                    _ => {
+                        None
+                    }
+                }
+            }
+            _ => {
+                error!("Not the type of query we support");
+                None
+            }
+        };
+        if some_table == None {
+            error!("No table found");
+            return futures::future::err::<Vec<SQLStatement>, GenericError>(ParseSqlError.into());
+        }
+        let table = some_table.unwrap().to_string();
+        let loggy = cfg.get_log(&table);
+        if loggy.is_none() {
+            return futures::future::err::<Vec<SQLStatement>, GenericError>(ParseSqlError.into());
+        }
+    }
+
+    futures::future::ok(ast)
 }
 
 

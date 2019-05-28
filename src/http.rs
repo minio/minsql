@@ -19,16 +19,17 @@ use std::fmt;
 use std::time::Instant;
 
 use futures::{future, Future, Stream};
-use hyper::{Body, Chunk, Client, header, Method, Request, Response, StatusCode};
-use hyper::client::HttpConnector;
+use hyper::{Body,  header, Method, Request, Response, StatusCode};
 use regex::Regex;
 
 use crate::config::Config;
 use crate::query::parse_query;
 use crate::query::ScanFlags;
 use crate::query::scanlog;
+use crate::query::validate_logs;
 use crate::storage::{list_msl_bucket_files, write_to_datastore};
 use crate::storage::read_file;
+//use std::cell::RefCell;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type ResponseFuture = Box<Future<Item=Response<Body>, Error=GenericError> + Send>;
@@ -104,16 +105,13 @@ fn requested_log_from_request(req: &Request<Body>) -> Result<RequestedLog, Reque
     return Ok(RequestedLog { name: logname, method: method });
 }
 
-pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &Config) -> ResponseFuture {
+pub fn request_router(req: Request<Body>, cfg: &'static Config) -> ResponseFuture {
     // handle GETs as their own thing
     if req.method() == &Method::GET {
         match (req.method(), req.uri().path()) {
             (&Method::GET, "/") | (&Method::GET, "/index.html") => {
                 let body = Body::from(INDEX);
                 Box::new(future::ok(Response::new(body)))
-            }
-            (&Method::GET, "/test.html") => {
-                client_request_response(client)
             }
             _ => {
                 // Return 404 not found response.
@@ -123,7 +121,7 @@ pub fn request_router(req: Request<Body>, client: &Client<HttpConnector>, cfg: &
     } else if req.method() == &Method::POST {
         match (req.method(), req.uri().path()) {
             (&Method::POST, "/search") => {
-                api_log_search(cfg, req)
+                api_log_search(&cfg, req)
             }
             _ => {
                 // Return 404 not found response.
@@ -203,93 +201,34 @@ fn api_log_store(cfg: &Config, req: Request<Body>) -> ResponseFuture {
     )
 }
 
-fn client_request_response(client: &Client<HttpConnector>) -> ResponseFuture {
-    let req = Request::builder()
-        .method(Method::POST)
-        .uri(URL)
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(POST_DATA.into())
-        .unwrap();
 
-    Box::new(client.request(req).from_err().map(|web_res| {
-        // Compare the JSON we sent (before) with what we received (after):
-        let body = Body::wrap_stream(web_res.into_body().map(|b| {
-            Chunk::from(format!("<b>POST request body</b>: {}<br><b>Response</b>: {}",
-                                POST_DATA,
-                                std::str::from_utf8(&b).unwrap()))
-        }));
-
-        Response::new(body)
-    }))
-}
 
 // performs a query on a log
-fn api_log_search(cfg: &Config, req: Request<Body>) -> ResponseFuture {
+fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFuture {
     let start = Instant::now();
     lazy_static! {
         static ref SMART_FIELDS_RE : Regex = Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
     };
 
     // make a clone of the config for the closure
-    let cfg = cfg.clone();
+//    let cfg = RefCell::new(cfg);
+
     // A web api to run against
     Box::new(req.into_body()
         .concat2() // Concatenate all chunks in the body
         .from_err()
         .and_then(parse_query)
-//        .from_err()
         .map_err(|e| {
-            error!("----{}",e);
+            error!("----{}", e);
+            e
+        })
+        .and_then(move |ast| validate_logs(&cfg, ast))
+        .map_err(|e| {
+            error!("----{}", e);
             e
         })
         .and_then(move |ast| {
             println!("AST: {:?}", ast);
-            // Validate all the tables for all the queries, we don't want to start serving content
-            // for the first query and then discover subsequent queries are invalid
-            for query in &ast {
-                // find the table they want to query
-                let some_table = match query {
-                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
-                        match q.body {
-                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                                bodyselect.relation.clone()
-                            }
-                            _ => {
-                                error!("No table found");
-                                let response = Response::builder()
-                                    .status(StatusCode::BAD_REQUEST)
-                                    .header(header::CONTENT_TYPE, "text/plain")
-                                    .body(Body::from("fail"))?;
-                                return Ok(response);
-                            }
-                        }
-                    }
-                    _ => {
-                        error!("Not the type of query we support");
-                        let response = Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .header(header::CONTENT_TYPE, "text/plain")
-                            .body(Body::from("Unsupported query"))?;
-                        return Ok(response);
-                    }
-                };
-                if some_table == None {
-                    error!("No table found");
-                    let response = Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .header(header::CONTENT_TYPE, "text/plain")
-                        .body(Body::from("No table was found in the query statement"))?;
-                    return Ok(response);
-                }
-                let table = some_table.unwrap().to_string();
-                match cfg.get_log(&table) {
-                    Some(_) => (),
-                    _ => {
-                        error!("Tried to search an unknow log");
-                        return Ok(return_404());
-                    }
-                };
-            }
 
             let mut resulting_data = String::new();
             // for each query, retrive data

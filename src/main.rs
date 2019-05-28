@@ -31,9 +31,9 @@ extern crate hyperscan;
 use std::process;
 
 use futures::{future, Future};
-use hyper::{Client, Server};
+use hyper::{Server};
 use hyper::service::service_fn;
-use std::sync::Arc;
+//use std::sync::Arc;
 
 mod constants;
 mod config;
@@ -47,7 +47,7 @@ mod dialect;
 fn main() {
     pretty_env_logger::init();
     // Load the configuration file
-    let configuration = match config::load_configuration() {
+    let cfg = match config::load_configuration() {
         Ok(cfg) => cfg,
         Err(e) => {
             error!("Failed to load configuration: {}", e);
@@ -56,7 +56,7 @@ fn main() {
     };
 
     // Validate all datastore for reachability
-    for ds in configuration.datastore.iter() {
+    for ds in cfg.datastore.iter() {
         // if we find a bad datastore, for now let's panic
         if storage::can_reach_datastore(ds) == false {
             error!("{} is not a reachable datastore", ds.name.clone().unwrap());
@@ -67,22 +67,16 @@ fn main() {
     info!("Starting MinSQL Server");
 
 //    let addr = "0.0.0.0:9999".parse().unwrap();
-    let addr = configuration.server.as_ref().unwrap().address.as_ref().unwrap().parse().unwrap();
+    let addr = cfg.server.as_ref().unwrap().address.as_ref().unwrap().parse().unwrap();
 
-    let cfg = Arc::new(configuration);
+    let cfg = Box::new(cfg);
+    let cfg:&'static _ = Box::leak(cfg);
 
     hyper::rt::run(future::lazy(move || {
-        // Share a `Client` with all `Service`s
-        let client = Client::new();
-
-        let new_service = move || {
-            // Move a clone of `client` into the `service_fn`.
-            let client = client.clone();
+        let new_service =  move || {
             // Move a clone of `configuration` into the `service_fn`.
-            let cfg = cfg.clone();
-
             service_fn(move |req| {
-                http::request_router(req, &client, &cfg)
+                http::request_router(req, &cfg)
             })
         };
 
