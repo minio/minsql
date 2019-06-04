@@ -3,3 +3,6 @@
 
 # Cargo built
 target/
+
+# Prevent config.toml from accidentally being checked in
+config.toml
