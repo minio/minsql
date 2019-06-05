@@ -1,34 +1,19 @@
 version = "1"
 
-[datastore]
-    [datastore.play]
-    endpoint = "https://play.minio.io:9000"
-    access_key = "Q3AM3UQ867SPQQA43P2F"
-    secret_key = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
-    bucket = "testbucket1"
-    prefix = ""
+[server]
+   address = "0.0.0.0:9999"
 
-    [datastore.myminio]
-    endpoint = "https://play.minio.io:9000"
-    access_key = "Q3AM3UQ867SPQQA43P2F"
-    secret_key = "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
-    bucket = "testbucket2"
-    prefix = ""
+# List as many minIO instances to store and retrieve the logs
+[[datastore]]
+name = "myminio"
+endpoint = "http://localhost:9000"
+access_key = "minio"
+secret_key = "minio123"
+bucket = "mindev"
+prefix = ""
 
-[table]
-    [table.temperature1]
-    datastores = ["play", "myminio"]
-
-[auth]
-    [auth.NAME1]
-        [auth.NAME1.temperature1]
-        token = "TOKEN1"
-        api = ["search"]
-        expire = "duration"
-        status = "enabled"
-    [auth.NAME2]
-        [auth.NAME2.temperature2]
-        token = "TOKEN2"
-        api = ["search", "log"]
-        expire = "duration"
-        status = "disabled"
+# Define the logs that are available
+[[log]]
+name = "mylog"
+datastores = ["myminio"]
+commit_window = "0s"
