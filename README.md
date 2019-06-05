@@ -22,9 +22,7 @@ For a log `mylog` defined on the `config.toml` we can store logs on *minSQL* by 
 ```bash
 curl -X PUT \
   http://127.0.0.1:9999/mylog/store \
-  -H 'Content-Type: application/json' \
-  -d '10.8.0.1 - - [16/May/2019:23:02:56 +0000] "GET / HTTP/1.1" 400 256 "-" "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:52.0) Gecko/20100101 Firefox/52.0"
-2019/05/16 23:02:56 [info] 6#6: *7398 client sent plain HTTP request to HTTPS port while reading client request headers, client: 10.8.0.1, server: , request: "GET / HTTP/1.1", host: "35.226.0.43:443"'
+  -d '10.8.0.1 - - [16/May/2019:23:02:56 +0000] "GET / HTTP/1.1" 400 256 "-" "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:52.0) Gecko/20100101 Firefox/52.0"'
 ```
 
 You can send multiple log lines separated by `new line`
@@ -56,13 +54,19 @@ This will return you all the raw log lines stored for that log.
 ```
 
 You can select from multiple logs at the same time by separating the queries with semicolon (;), ie:
+
+```sql
+SELECT * FROM mylog;SELECT * FROM otherlog
+```
+
+Would be sent via curl like:
+
  ```bash
 curl -X POST \
   http://127.0.0.1:9999/search \
-  -H 'Content-Type: application/json' \
   -d 'SELECT * FROM mylog;SELECT * FROM otherlog'
 ```
-This will return result of the first query first and then start streaming the second query.
+This will return result of the first query and then start streaming the result of the second query and so on.
 
 ## Select parts of the data
 We can get only parts of the data by using any of the supported minSQL entities, which start with a `$` sign.
@@ -83,7 +87,7 @@ You can see that the data was selected as is, however the selected date column i
 
 ### Select by type
 
-MinSQL provides a nice list of entities that make the extractiong of data from your data easy. For example we can select any ip in our data by using`$ip` and any date using `$date`.
+MinSQL provides a nice list of entities that make the extraction of chunks data from your raw data easy thanks to our powerful Schema on Read approach. For example we can select any ip in our data by using the entity `$ip` and any date using `$date`.
 ```sql
 SELECT $ip, $date FROM mylog
 ```
@@ -94,6 +98,14 @@ To which minSQL will reply
 24.26.204.22 24/Jul/2017
 45.23.126.92 24/Jul/2017
 ```
+
+If your data contains more than one ip address you can access the subsequent ip's using positional entities.
+
+```sql
+SELECT $ip, $ip2, $ip3, $date FROM mylog
+```
+
+Please note that if no positional number is specified on an entity, it will default to the first position, in this case `$ip == $ip1`
 
 # Filtering
 Using the powerful select engine of minSQL you can also filter the data so only the relevant information that you need to extract from your logs is returned.
@@ -111,10 +123,21 @@ To which minSQL will reply only with the matched lines
 67.164.164.165 - - [24/Jul/2017:00:16:48 +0000] "GET /favicon.ico HTTP/1.1" 404 209 "http://104.236.9.232/info.php" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36"
 ```
 
+## Contains a value
+
+You can select log lines that contain a value by using the `LIKE` operator or `NOT NULL` for any entity.
+
+```sql
+SELECT * FROM mylog WHERE $line LIKE 'Intel' AND $email IS NOT NULL
+```
+
+This query would return all the log lines conaining the word `Intel` that also contain an email address.
+
 # Entities
 
 A list of supported entities by minSQL:
 
+* *$line*: Represents the whole log line
 * *$ip*: Selects any format of ipv4
 * *$date*: Any format of date containing date, month and year.
 * *$email*: Any email@address.com
