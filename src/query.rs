@@ -27,6 +27,7 @@ use regex::Regex;
 use sqlparser::sqlast::SQLStatement;
 use sqlparser::sqlparser::Parser;
 use sqlparser::sqlparser::ParserError;
+use tokio::sync::mpsc;
 
 use crate::config::Config;
 use crate::constants::SF_DATE;
@@ -537,10 +538,13 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
             }
             // if we reach this point, no query was invalid
 
-            let (mut tx, body) = hyper::Body::channel();
+            let (mut body_tx, body) = hyper::Body::channel();
+            let (mut tx, rx) = mpsc::unbounded_channel();
 
             let ast = ast.clone();
             let cfg = cfg.clone();
+
+            // producer task
             hyper::rt::spawn({
                 // for each query, retrive data
                 stream::iter_ok(ast).fold(tx, move |tx, query| {
@@ -568,11 +572,24 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
 
 
                     let my_ds = cfg.datastore.clone();
-                    stream::iter_ok(my_ds).fold(tx,  |tx, ds| {
-                        tx.send(Chunk::from(ds.clone().name.unwrap().clone())).map_err(|e| println!("{:?}", e))
+                    stream::iter_ok(my_ds).fold(tx, |tx, ds| {
+                        tx.send(ds.clone().name.unwrap().clone()).map_err(|e| println!("{:?}", e))
                     })
-
                 }).map(|_| ()) // Drop tx handle
+            });
+
+            // consumer task
+            hyper::rt::spawn({
+                rx
+                     .map_err(|e| {
+                        println!("{:?}", e);
+                    })
+                    .fold(body_tx, move |body_tx, msg| {
+                        println!("Got `{:?}`", msg);
+                        body_tx.send(Chunk::from(msg))
+                            .map_err(|e| println!("error = {:?}", e))
+                    })
+                    .map(|_| ()) // drop body_tx handle
             });
 
 
