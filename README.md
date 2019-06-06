@@ -6,7 +6,7 @@ MinSQL is a log search engine designed with simplicity in mind to the extend tha
 
 To build the project simply run 
 ```bash
-cargo build
+cargo build --release
 ```
 
 ## Running the project
