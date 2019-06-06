@@ -19,10 +19,10 @@ use std::error;
 use std::fmt;
 use std::time::Instant;
 
-use futures::{future, Future, stream, Stream};
+use futures::{Future, stream, Stream};
 use futures::future::FutureResult;
 use futures::Sink;
-use hyper::{Body, Chunk, header, Method, Request, Response, StatusCode};
+use hyper::{Body, Chunk, header, Request, Response, StatusCode};
 use regex::Regex;
 use sqlparser::sqlast::SQLStatement;
 use sqlparser::sqlparser::Parser;
@@ -36,10 +36,9 @@ use crate::constants::SF_IP;
 use crate::constants::SF_QUOTED;
 use crate::constants::SF_URL;
 use crate::dialect::MinSQLDialect;
-use crate::http::{return_404, return_404_future};
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
-use crate::storage::{list_msl_bucket_files, write_to_datastore};
+use crate::storage::list_msl_bucket_files;
 use crate::storage::read_file;
 
 bitflags! {
@@ -56,13 +55,13 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PositionalColumn {
     position: i32,
     alias: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SmartColumn {
     // $ip, $email...
     typed: String,
@@ -211,6 +210,7 @@ pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> 
     results
 }
 
+#[derive(Debug, Clone)]
 struct QueryParsing {
     read_all: bool,
     scan_flags: ScanFlags,
@@ -243,7 +243,7 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
         .and_then(move |ast| {
             println!("AST: {:?}", ast);
 
-            let mut queries_parse: Vec<QueryParsing> = Vec::new();
+            let mut queries_parse: HashMap<String, QueryParsing> = HashMap::new();
 
             // We are going to validate the whole payload.
             // Make sure tables are valid, projections are valid and filtering operations are supported
@@ -282,14 +282,6 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                         .body(Body::from("No table was found in the query statement"))?;
                     return Ok(response);
                 }
-                let table = some_table.unwrap().to_string();
-                let log = match cfg.get_log(&table) {
-                    Some(l) => l,
-                    _ => {
-                        error!("Tried to search an unknow log");
-                        return Ok(return_404());
-                    }
-                };
 
                 // determine our read strategy
                 let read_all = match query {
@@ -521,28 +513,30 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                         scan_flags = scan_flags | flag;
                     }
                 }
-                println!("flags: {:?}", scan_flags);
-
-                println!("Read all: {}", read_all);
-                println!("Positionals : {:?}", positional_fields);
-                println!("Smarts : {:?}", smart_fields);
-                println!("ordered  : {:?}", projections_ordered);
+//                println!("flags: {:?}", scan_flags);
+//
+//                println!("Read all: {}", read_all);
+//                println!("Positionals : {:?}", positional_fields);
+//                println!("Smarts : {:?}", smart_fields);
+//                println!("ordered  : {:?}", projections_ordered);
                 // we keep track of the parsing of the queries in order
-                queries_parse.push(QueryParsing {
+                let query_string = query.to_string();
+                queries_parse.insert(query_string, QueryParsing {
                     read_all,
                     scan_flags,
                     positional_fields,
                     smart_fields,
                     projections_ordered,
-                })
+                });
             }
             // if we reach this point, no query was invalid
 
-            let (mut body_tx, body) = hyper::Body::channel();
-            let (mut tx, rx) = mpsc::unbounded_channel();
+            let (body_tx, body) = hyper::Body::channel();
+            let (tx, rx) = mpsc::unbounded_channel();
 
             let ast = ast.clone();
             let cfg = cfg.clone();
+            let queries_parse = queries_parse.clone();
 
             // producer task
             hyper::rt::spawn({
@@ -570,10 +564,237 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                     // should be safe to unwrap since query validation made sure the log exists
                     let log = cfg.get_log(&table).unwrap();
 
-
+                    let log = log.clone();
                     let my_ds = cfg.datastore.clone();
-                    stream::iter_ok(my_ds).fold(tx, |tx, ds| {
-                        tx.send(ds.clone().name.unwrap().clone()).map_err(|e| println!("{:?}", e))
+                    let queries_parse = queries_parse.clone();
+                    let query = query.clone();
+                    stream::iter_ok(my_ds).fold(tx, move |tx, ds| {
+                        let msl_files = match list_msl_bucket_files(&log.name[..], &ds) {
+                            Ok(mf) => mf,
+                            Err(e) => {
+                                //TODO: Handler Error. Ideally we should end the channel and terminate the stream
+                                // use take_while http://xion.io/post/code/rust-stream-terminate.html with Result
+                                error!("error reading files from minIO {:?}", e);
+                                Vec::new()
+                            }
+                        };
+                        // for each file found inside the log
+                        let ds = ds.clone();
+                        let queries_parse = queries_parse.clone();
+                        let query = query.clone();
+                        stream::iter_ok(msl_files).fold(tx, move |tx, f| {
+                            // TODO: Ideally we want to work with the streaming body
+                            let all_file_lines = match read_file(&f, &ds) {
+                                Ok(l) => l,
+                                Err(e) => {
+                                    error!("problem reading file {}", e);
+                                    //TODO: Handle error. Ideally we want to stop the channel
+                                    "".to_string()
+                                }
+                            };
+
+
+                            let individual_lines: Vec<String> = all_file_lines.lines().map(|x| x.to_string()).collect();
+                            let queries_parse = queries_parse.clone();
+                            let query = query.clone();
+                            stream::iter_ok(individual_lines).fold(tx, move |tx, line| {
+                                let mut projection_values: HashMap<String, String> = HashMap::new();
+                                let query_data = queries_parse.get(&query.to_string()[..]).unwrap();
+                                // if we have position columns, process
+                                if query_data.positional_fields.len() > 0 {
+                                    //TODO: Use separator construct from header
+                                    let parts: Vec<&str> = line.split(" ").collect();
+                                    for pos in &query_data.positional_fields {
+                                        if pos.position - 1 < (parts.len() as i32) {
+                                            projection_values.insert(pos.alias.clone(), parts[(pos.position - 1) as usize].to_string());
+                                        } else {
+                                            projection_values.insert(pos.alias.clone(), "".to_string());
+                                        }
+                                    }
+                                }
+
+                                if query_data.smart_fields.len() > 0 {
+                                    let found_vals = scanlog(&line.to_string(), query_data.scan_flags);
+                                    for smt in &query_data.smart_fields {
+                                        if found_vals.contains_key(&smt.typed[..]) {
+                                            // if the requested position is available
+                                            if smt.position - 1 < (found_vals[&smt.typed].len() as i32) {
+                                                projection_values.insert(smt.alias.clone(), found_vals[&smt.typed][(smt.position - 1) as usize].clone());
+                                            } else {
+                                                projection_values.insert(smt.alias.clone(), "".to_string());
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // filter the line
+                                let mut skip_line = false;
+                                match query {
+                                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
+                                        match q.body {
+                                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                                                let mut all_conditions_pass = true;
+                                                for slct in &bodyselect.selection {
+                                                    match slct {
+                                                        sqlparser::sqlast::ASTNode::SQLIsNotNull(ast) => {
+                                                            let identifier = match **ast {
+                                                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
+                                                                    identifier.to_string()
+                                                                }
+                                                                _ => {
+                                                                    // TODO: Should we be retunring anything at all?
+                                                                    "".to_string()
+                                                                }
+                                                            };
+                                                            if projection_values.contains_key(&identifier[..]) == false || projection_values[&identifier] == "" {
+                                                                all_conditions_pass = false;
+                                                            }
+                                                        }
+                                                        sqlparser::sqlast::ASTNode::SQLIsNull(ast) => {
+                                                            let identifier = match **ast {
+                                                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
+                                                                    identifier.to_string()
+                                                                }
+                                                                _ => {
+                                                                    // TODO: Should we be retunring anything at all?
+                                                                    "".to_string()
+                                                                }
+                                                            };
+                                                            if projection_values[&identifier] != "" {
+                                                                all_conditions_pass = false;
+                                                            }
+                                                        }
+                                                        sqlparser::sqlast::ASTNode::SQLBinaryExpr { left, op, right } => {
+                                                            let identifier = left.to_string();
+
+                                                            match op {
+                                                                sqlparser::sqlast::SQLOperator::Eq => {
+                                                                    // TODO: Optimize this op_value preparation, don't do it in the loop
+                                                                    let op_value = match **right {
+                                                                        sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
+                                                                            // Did they used double quotes for the value?
+                                                                            let mut str_id = right_value.to_string();
+                                                                            if str_id.starts_with("\"") {
+                                                                                str_id = str_id[1..][..str_id.len() - 2].to_string();
+                                                                            }
+                                                                            str_id
+                                                                        }
+                                                                        sqlparser::sqlast::ASTNode::SQLValue(ref right_value) => {
+                                                                            match right_value {
+                                                                                sqlparser::sqlast::Value::SingleQuotedString(s) => { s.to_string() }
+                                                                                _ => { right_value.to_string() }
+                                                                            }
+                                                                        }
+                                                                        _ => {
+                                                                            "".to_string()
+                                                                        }
+                                                                    };
+
+                                                                    if projection_values.contains_key(&identifier[..]) && projection_values[&identifier] != op_value {
+                                                                        all_conditions_pass = false;
+                                                                    }
+                                                                }
+                                                                sqlparser::sqlast::SQLOperator::NotEq => {
+                                                                    // TODO: Optimize this op_value preparation, don't do it in the loop
+                                                                    let op_value = match **right {
+                                                                        sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
+                                                                            // Did they used double quotes for the value?
+                                                                            let mut str_id = right_value.to_string();
+                                                                            if str_id.starts_with("\"") {
+                                                                                str_id = str_id[1..][..str_id.len() - 2].to_string();
+                                                                            }
+                                                                            str_id
+                                                                        }
+                                                                        sqlparser::sqlast::ASTNode::SQLValue(ref right_value) => {
+                                                                            match right_value {
+                                                                                sqlparser::sqlast::Value::SingleQuotedString(s) => { s.to_string() }
+                                                                                _ => { right_value.to_string() }
+                                                                            }
+                                                                        }
+                                                                        _ => {
+                                                                            "".to_string()
+                                                                        }
+                                                                    };
+                                                                    if projection_values.contains_key(&identifier[..]) && projection_values[&identifier] == op_value {
+                                                                        all_conditions_pass = false;
+                                                                    }
+                                                                }
+                                                                sqlparser::sqlast::SQLOperator::Like => {
+                                                                    // TODO: Optimize this op_value preparation, don't do it in the loop
+                                                                    let op_value = match **right {
+                                                                        sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
+                                                                            // Did they used double quotes for the value?
+                                                                            let mut str_id = right_value.to_string();
+                                                                            if str_id.starts_with("\"") {
+                                                                                str_id = str_id[1..][..str_id.len() - 2].to_string();
+                                                                            }
+                                                                            str_id
+                                                                        }
+                                                                        sqlparser::sqlast::ASTNode::SQLValue(ref right_value) => {
+                                                                            match right_value {
+                                                                                sqlparser::sqlast::Value::SingleQuotedString(s) => { s.to_string() }
+                                                                                _ => { right_value.to_string() }
+                                                                            }
+                                                                        }
+                                                                        _ => {
+                                                                            "".to_string()
+                                                                        }
+                                                                    };
+                                                                    // TODO: Add support for wildcards ie: LIKE 'server_.domain.com' where _ is a single character wildcard
+                                                                    if identifier == "$line" {
+                                                                        if line.contains(&op_value[..]) == false {
+                                                                            all_conditions_pass = false;
+                                                                        }
+                                                                    } else {
+                                                                        if projection_values.contains_key(&identifier[..]) && projection_values[&identifier].contains(&op_value[..]) == false {
+                                                                            all_conditions_pass = false;
+                                                                        }
+                                                                    }
+                                                                }
+                                                                _ => {
+                                                                    info!("Unhandled operator");
+                                                                }
+                                                            }
+                                                        }
+                                                        _ => {
+                                                            info!("Unhandled operation");
+                                                        }
+                                                    }
+                                                }
+                                                if all_conditions_pass == false {
+                                                    skip_line = true;
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    _ => {}
+                                };
+
+                                let mut outline: String = String::new();
+
+                                if skip_line == false {
+                                    if query_data.read_all {
+                                        outline = line.clone();
+                                        outline.push('\n');
+                                    } else {
+                                        // build the result
+                                        // iterate over the ordered resulting projections
+                                        let mut field_values: Vec<String> = Vec::new();
+                                        for proj in &query_data.projections_ordered {
+                                            // check if it's in positionsals
+                                            if projection_values.contains_key(proj) {
+                                                field_values.push(projection_values[proj].clone());
+                                            }
+                                        }
+                                        // TODO: When adding CSV output, change the separator
+                                        outline = field_values.join(" ");
+                                        outline.push('\n');
+                                    }
+                                }
+                                tx.send(outline).map_err(|e| println!("{:?}", e))
+                            })
+                        })
                     })
                 }).map(|_| ()) // Drop tx handle
             });
@@ -581,11 +802,10 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
             // consumer task
             hyper::rt::spawn({
                 rx
-                     .map_err(|e| {
+                    .map_err(|e| {
                         println!("{:?}", e);
                     })
                     .fold(body_tx, move |body_tx, msg| {
-                        println!("Got `{:?}`", msg);
                         body_tx.send(Chunk::from(msg))
                             .map_err(|e| println!("error = {:?}", e))
                     })
@@ -595,11 +815,6 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
 
             let duration = start.elapsed();
             info!("Search took: {:?}", duration);
-//            let response = Response::builder()
-//                .status(StatusCode::OK)
-//                .header(header::CONTENT_TYPE, "text/plain")
-//                .body(Body::from(resulting_data))?;
-//            Ok(response)
             Ok(Response::new(body))
         })
     )
