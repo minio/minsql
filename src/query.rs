@@ -241,8 +241,6 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
             e
         })
         .and_then(move |ast| {
-            println!("AST: {:?}", ast);
-
             let mut queries_parse: HashMap<String, QueryParsing> = HashMap::new();
 
             // We are going to validate the whole payload.
