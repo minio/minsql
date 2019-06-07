@@ -33,7 +33,7 @@ use rusoto_credential::ProvideAwsCredentials;
 use rusoto_s3::{GetObjectError, GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3, S3Client};
 use uuid::Uuid;
 
-use crate::config::DataStore;
+use crate::config::{Config, DataStore};
 
 //use rusoto_core::RusotoError;
 
@@ -169,8 +169,9 @@ impl fmt::Display for WriteDatastoreError {
     }
 }
 
-pub fn write_to_datastore(logname: &str, datastore: &DataStore, payload: &String) -> Result<bool, WriteDatastoreError> {
+pub fn write_to_datastore(logname: &str, cfg: &Config, payload: &String) -> Result<bool, WriteDatastoreError> {
     let start = Instant::now();
+    let datastore = &cfg.datastore[0];
     // Get the Object Storage client
     let s3_client = client_for_datastore(datastore);
     let now = Utc::now();

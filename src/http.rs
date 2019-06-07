@@ -14,15 +14,17 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 
 use futures::{future, Future, stream, Stream};
 use futures::Sink;
-use hyper::{Body, Chunk, header, Method, Request, Response, StatusCode};
+use hyper::{Body, Chunk, Method, Request, Response, StatusCode};
 
 use crate::config::Config;
+use crate::ingest::{api_log_store, IngestBuffer};
 use crate::query::api_log_search;
-use crate::storage::{ write_to_datastore};
 
 //use std::cell::RefCell;
 //type ChunkStream = Box<Stream<Item = Chunk, Error = hyper::Error>>;
@@ -37,9 +39,9 @@ static NOTFOUND: &[u8] = b"Not Found";
 
 
 #[derive(Debug)]
-struct RequestedLog {
-    name: String,
-    method: String,
+pub struct RequestedLog {
+    pub name: String,
+    pub method: String,
 }
 
 #[derive(Debug)]
@@ -72,7 +74,7 @@ pub fn return_404_future() -> ResponseFuture {
     Box::new(future::ok(return_404()))
 }
 
-fn requested_log_from_request(req: &Request<Body>) -> Result<RequestedLog, RequestedLogError> {
+pub fn requested_log_from_request(req: &Request<Body>) -> Result<RequestedLog, RequestedLogError> {
     let request_path_no_slash = String::from(&req.uri().path()[1..]);
     let path_split = request_path_no_slash.split("/");
     let parts: Vec<&str> = path_split.collect();
@@ -93,7 +95,7 @@ fn requested_log_from_request(req: &Request<Body>) -> Result<RequestedLog, Reque
 //}
 
 
-pub fn request_router(req: Request<Body>, cfg: &'static Config) -> ResponseFuture {
+pub fn request_router(req: Request<Body>, cfg: &'static Config, log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>) -> ResponseFuture {
     // handle GETs as their own thing
     if req.method() == &Method::GET {
         match (req.method(), req.uri().path()) {
@@ -102,7 +104,6 @@ pub fn request_router(req: Request<Body>, cfg: &'static Config) -> ResponseFutur
 
                 hyper::rt::spawn({
                     stream::iter_ok(0..10).fold(tx, |tx, i| {
-                        println!("here");
                         tx.send(Chunk::from(format!("Message {} from spawned task", i)))
                             .map_err(|e| {
                                 println!("error = {:?}", e.to_string());
@@ -153,7 +154,7 @@ pub fn request_router(req: Request<Body>, cfg: &'static Config) -> ResponseFutur
 
         match (req.method(), &requested_log.method[..]) {
             (&Method::PUT, "store") => {
-                api_log_store(cfg, req)
+                api_log_store(cfg, req, log_ingest_buffers)
             }
             _ => {
                 // Return 404 not found response.
@@ -163,46 +164,6 @@ pub fn request_router(req: Request<Body>, cfg: &'static Config) -> ResponseFutur
     }
 }
 
-// Handles a PUT operation to a log
-fn api_log_store(cfg: &Config, req: Request<Body>) -> ResponseFuture {
-    let requested_log = match requested_log_from_request(&req) {
-        Ok(ln) => ln,
-        Err(e) => {
-            error!("{}", e);
-            return return_404_future();
-        }
-    };
-    // make a clone of the config for the closure
-    let cfg = cfg.clone();
-    Box::new(req.into_body()
-        .concat2() // Concatenate all chunks in the body
-        .from_err()
-        .and_then(move |entire_body| {
-            // Read the body from the request
-            let payload: String = match String::from_utf8(entire_body.to_vec()) {
-                Ok(str) => str,
-                Err(err) => panic!("Couldn't convert buffer to string: {}", err)
-            };
-            match write_to_datastore(&requested_log.name, &cfg.datastore[0], &payload) {
-                Ok(x) => x,
-                Err(e) => {
-                    error!("{}", e);
-                    let response = Response::builder()
-                        .status(StatusCode::INSUFFICIENT_STORAGE)
-                        .header(header::CONTENT_TYPE, "text/plain")
-                        .body(Body::from("fail"))?;
-                    return Ok(response);
-                }
-            };
 
-            // Send response that the request has been received successfully
-            let response = Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "text/plain")
-                .body(Body::from("ok"))?;
-            Ok(response)
-        })
-    )
-}
 
 

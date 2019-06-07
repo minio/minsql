@@ -529,8 +529,8 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
             }
             // if we reach this point, no query was invalid
 
-            let (body_tx, body) = hyper::Body::channel();
             let (tx, rx) = mpsc::unbounded_channel();
+            let (body_tx, body) = hyper::Body::channel();
 
             let ast = ast.clone();
             let cfg = cfg.clone();

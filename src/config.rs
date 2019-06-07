@@ -73,6 +73,39 @@ impl Config {
         }
         None
     }
+    // Translates a string duration to an unsigned integer
+    // for example, "5s" returns 5
+    // "10m" returns 600
+    pub fn commit_window_to_seconds(commit_window: &String) -> u64 {
+        let last_character = &commit_window[commit_window.len() - 1..commit_window.len()];
+        match last_character {
+            "s" => {
+                let integer_value = &commit_window[0..commit_window.len() - 1].parse::<u64>();
+                let seconds = match integer_value {
+                    Ok(val) => *val,
+                    Err(_) => {
+                        error!("Interval cannot be parsed");
+                        0 as u64
+                    }
+                };
+                seconds
+            }
+            "m" => {
+                let integer_value = &commit_window[0..commit_window.len() - 1].parse::<u64>();
+                let seconds = match integer_value {
+                    Ok(val) => *val * 60,
+                    Err(_) => {
+                        error!("Interval cannot be parsed");
+                        0 as u64
+                    }
+                };
+                seconds
+            }
+            _ => {
+                0 as u64
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -112,4 +145,15 @@ pub fn load_configuration() -> Result<Config, ConfigurationError> {
         Err(e) => return Err(ConfigurationError::new(&format!("{}", e)[..]))
     };
     Ok(configuration)
+}
+
+#[cfg(test)]
+mod config_tests {
+    use crate::config::Config;
+
+    #[test]
+    fn parse_interval() {
+        assert_eq!(Config::commit_window_to_seconds(&"5s".to_string()), 5);
+        assert_eq!(Config::commit_window_to_seconds(&"5m".to_string()), 300);
+    }
 }
