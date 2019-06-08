@@ -511,12 +511,7 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                         scan_flags = scan_flags | flag;
                     }
                 }
-//                println!("flags: {:?}", scan_flags);
-//
-//                println!("Read all: {}", read_all);
-//                println!("Positionals : {:?}", positional_fields);
-//                println!("Smarts : {:?}", smart_fields);
-//                println!("ordered  : {:?}", projections_ordered);
+
                 // we keep track of the parsing of the queries in order
                 let query_string = query.to_string();
                 queries_parse.insert(query_string, QueryParsing {
