@@ -19,10 +19,10 @@ use std::error;
 use std::fmt;
 use std::time::Instant;
 
-use futures::{Future, stream, Stream};
 use futures::future::FutureResult;
 use futures::Sink;
-use hyper::{Body, Chunk, header, Request, Response, StatusCode};
+use futures::{stream, Future, Stream};
+use hyper::{header, Body, Chunk, Request, Response, StatusCode};
 use regex::Regex;
 use sqlparser::sqlast::SQLStatement;
 use sqlparser::sqlparser::Parser;
@@ -91,22 +91,19 @@ impl error::Error for ParseSqlError {
     }
 }
 
-
 pub fn parse_query(entire_body: Chunk) -> FutureResult<Vec<SQLStatement>, GenericError> {
     let payload: String = match String::from_utf8(entire_body.to_vec()) {
         Ok(str) => str,
-        Err(err) => panic!("Couldn't convert buffer to string: {}", err)
+        Err(err) => panic!("Couldn't convert buffer to string: {}", err),
     };
 
     // attempt to parse the payload
     let dialect = MinSQLDialect {};
-//    let ast = Parser::parse_sql(&dialect, payload.clone());
+    //    let ast = Parser::parse_sql(&dialect, payload.clone());
 
-//    futures::future::result(ast)
+    //    futures::future::result(ast)
     match Parser::parse_sql(&dialect, payload.clone()) {
-        Ok(q) => {
-            futures::future::ok(q)
-        }
+        Ok(q) => futures::future::ok(q),
         Err(e) => {
             // Unable to parse query, match reason
             match e {
@@ -123,23 +120,21 @@ pub fn parse_query(entire_body: Chunk) -> FutureResult<Vec<SQLStatement>, Generi
     }
 }
 
-pub fn validate_logs(cfg: &Config, ast: Vec<SQLStatement>) -> FutureResult<Vec<SQLStatement>, GenericError> {
-
+pub fn validate_logs(
+    cfg: &Config,
+    ast: Vec<SQLStatement>,
+) -> FutureResult<Vec<SQLStatement>, GenericError> {
     // Validate all the tables for all the queries, we don't want to start serving content
     // for the first query and then discover subsequent queries are invalid
     for query in &ast {
         // find the table they want to query
         let some_table = match query {
-            sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
-                match q.body {
-                    sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                        bodyselect.relation.clone()
-                    }
-                    _ => {
-                        None
-                    }
+            sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => match q.body {
+                sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                    bodyselect.relation.clone()
                 }
-            }
+                _ => None,
+            },
             _ => {
                 error!("Not the type of query we support");
                 None
@@ -158,7 +153,6 @@ pub fn validate_logs(cfg: &Config, ast: Vec<SQLStatement>) -> FutureResult<Vec<S
 
     futures::future::ok(ast)
 }
-
 
 pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> {
     // Compile the regex only once
@@ -223,7 +217,8 @@ struct QueryParsing {
 pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFuture {
     let start = Instant::now();
     lazy_static! {
-        static ref SMART_FIELDS_RE : Regex = Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
+        static ref SMART_FIELDS_RE: Regex =
+            Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
     };
 
     // A web api to run against

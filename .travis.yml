@@ -1,0 +1,73 @@
+sudo: false
+language: rust
+rust:
+  - stable
+  - beta
+  - nightly
+matrix:
+  allow_failures:
+    - rust: nightly
+      
+os:
+  - linux
+
+compiler:
+  - gcc
+  - clang
+
+install:
+  - (rustup component add rustfmt || true)
+  - PATH=$PATH:/home/travis/.cargo/bin
+  
+addons:
+  apt:
+    sources:
+      - george-edison55-precise-backports # cmake 3.2.3 / doxygen 1.8.3
+      - ubuntu-toolchain-r-test # gcc-4.8 / g++-4.8
+    packages:
+      - cmake
+      - cmake-data
+      - g++
+      - gcc-4.8
+      - g++-4.8
+      - pkg-config
+      - ragel
+      - libbz2-dev
+      - libpcap-dev
+      - sqlite3
+      - libsqlite3-dev
+      - python-dev
+      - tree
+
+env:
+  global:
+    - RUST_BACKTRACE=1
+    - BOOST_VERSION_MINOR=67
+    - BOOST_ROOT=$HOME/boost-1.$BOOST_VERSION_MINOR
+    - HYPERSCAN_VERSION=5.0.0
+    - HYPERSCAN_ROOT=$HOME/hyperscan-$HYPERSCAN_VERSION
+    - LLVM_VERSION=6.0
+    - LLVM_ROOT=$HOME/llvm-$LLVM_VERSION
+    - LLVM_CONFIG_PATH=$LLVM_ROOT/bin/llvm-config
+
+before_install:
+  - .travis/setup-travis.sh
+
+before_script:
+  - .travis/build-hyperscan.sh
+
+script:
+  - cargo fmt --all -- --check
+  - cargo build --verbose --all
+  - cargo test --verbose --all
+
+after_failure:
+  - echo `pwd`
+  - tree -h
+  - $LLVM_ROOT/bin/llvm-config --cxxflags --ldflags
+
+cache:
+  directories:
+    - $BOOST_ROOT
+    - $LLVM_ROOT
+    - $HYPERSCAN_ROOT

@@ -19,18 +19,20 @@ use std::time::Instant;
 
 use chrono::{Datelike, Timelike, Utc};
 //use chrono::DateTime;
-use futures::Future;
-use futures::future::FutureResult;
 use futures::future::result;
-use futures::Poll;
+use futures::future::FutureResult;
 use futures::stream::Stream;
+use futures::Future;
+use futures::Poll;
 use rusoto_core::HttpClient;
 use rusoto_core::Region;
 use rusoto_core::RusotoError;
 use rusoto_credential::AwsCredentials;
 use rusoto_credential::CredentialsError;
 use rusoto_credential::ProvideAwsCredentials;
-use rusoto_s3::{GetObjectError, GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3, S3Client};
+use rusoto_s3::{
+    GetObjectError, GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3Client, S3,
+};
 use uuid::Uuid;
 
 use crate::config::{Config, DataStore};
@@ -53,7 +55,7 @@ impl From<RusotoError<GetObjectError>> for StorageError {
     fn from(err: RusotoError<GetObjectError>) -> Self {
         match err {
             RusotoError::Service(e) => StorageError::Get(e),
-            _ => StorageError::Io(IoError::last_os_error())
+            _ => StorageError::Io(IoError::last_os_error()),
         }
     }
 }
@@ -69,7 +71,6 @@ impl From<IoError> for StorageError {
 pub struct CustomCredentialsProvider {
     credentials: AwsCredentials,
 }
-
 
 impl CustomCredentialsProvider {
     pub fn with_credentials(credentials: AwsCredentials) -> Self {
@@ -108,7 +109,8 @@ fn client_for_datastore(datastore: &DataStore) -> S3Client {
         &datastore.access_key[..],
         &datastore.secret_key[..],
         None,
-        None);
+        None,
+    );
     let provider = CustomCredentialsProvider::with_credentials(credentials);
     let dispatcher = HttpClient::new().expect("failed to create request dispatcher");
     // A custom region is the way to point to a minio instance
@@ -117,10 +119,7 @@ fn client_for_datastore(datastore: &DataStore) -> S3Client {
         endpoint: datastore.endpoint.clone(),
     };
     // Build the client
-    let s3_client = S3Client::new_with(
-        dispatcher,
-        provider,
-        region);
+    let s3_client = S3Client::new_with(dispatcher, provider, region);
     s3_client
 }
 
@@ -129,8 +128,8 @@ pub fn can_reach_datastore(datastore: &DataStore) -> bool {
     // Get the Object Storage client
     let s3_client = client_for_datastore(datastore);
     // perform list call to verify we have access
-    let can_reach = match s3_client.list_objects(
-        ListObjectsRequest {
+    let can_reach = match s3_client
+        .list_objects(ListObjectsRequest {
             bucket: datastore.bucket.clone(),
             delimiter: None,
             encoding_type: None,
@@ -138,7 +137,9 @@ pub fn can_reach_datastore(datastore: &DataStore) -> bool {
             max_keys: Some(i64::from(1)),
             prefix: None,
             request_payer: None,
-        }).sync() {
+        })
+        .sync()
+    {
         Ok(_) => true,
         Err(e) => {
             info!("Cannot access bucket: {}", e);
@@ -154,12 +155,14 @@ fn str_to_streaming_body(s: String) -> rusoto_s3::StreamingBody {
 
 #[derive(Debug)]
 pub struct WriteDatastoreError {
-    details: String
+    details: String,
 }
 
 impl WriteDatastoreError {
     pub fn new(msg: &str) -> WriteDatastoreError {
-        WriteDatastoreError { details: msg.to_string() }
+        WriteDatastoreError {
+            details: msg.to_string(),
+        }
     }
 }
 
@@ -169,33 +172,44 @@ impl fmt::Display for WriteDatastoreError {
     }
 }
 
-pub fn write_to_datastore(logname: &str, cfg: &Config, payload: &String) -> Result<bool, WriteDatastoreError> {
+pub fn write_to_datastore(
+    logname: &str,
+    cfg: &Config,
+    payload: &String,
+) -> Result<bool, WriteDatastoreError> {
     let start = Instant::now();
     let datastore = &cfg.datastore[0];
     // Get the Object Storage client
     let s3_client = client_for_datastore(datastore);
     let now = Utc::now();
     let my_uuid = Uuid::new_v4();
-    let target_file = format!("{log}/{year}/{month}/{day}/{hour}/{ts}.msl.uncompacted",
-                              log = logname,
-                              year = now.date().year(),
-                              month = now.date().month(),
-                              day = now.date().day(),
-                              hour = now.hour(),
-                              ts = my_uuid);
+    let target_file = format!(
+        "{log}/{year}/{month}/{day}/{hour}/{ts}.msl.uncompacted",
+        log = logname,
+        year = now.date().year(),
+        month = now.date().month(),
+        day = now.date().day(),
+        hour = now.hour(),
+        ts = my_uuid
+    );
     let destination = format!("minsql/{}", target_file);
     // turn the payload into a streaming body
     let strbody = str_to_streaming_body(payload.clone());
     // save the payload
-    match s3_client.put_object(PutObjectRequest {
-        bucket: datastore.bucket.clone(),
-        key: destination,
-        body: Some(strbody),
-        ..Default::default()
-    }).sync() {
+    match s3_client
+        .put_object(PutObjectRequest {
+            bucket: datastore.bucket.clone(),
+            key: destination,
+            body: Some(strbody),
+            ..Default::default()
+        })
+        .sync()
+    {
         Ok(x) => x,
         Err(e) => {
-            return Err(WriteDatastoreError::new(&format!("Could not write to datastore: {}", e)[..]));
+            return Err(WriteDatastoreError::new(
+                &format!("Could not write to datastore: {}", e)[..],
+            ));
         }
     };
     //TODO: Remove this metric
@@ -204,15 +218,16 @@ pub fn write_to_datastore(logname: &str, cfg: &Config, payload: &String) -> Resu
     Ok(true)
 }
 
-
 #[derive(Debug)]
 pub struct ListMslFilesError {
-    details: String
+    details: String,
 }
 
 impl ListMslFilesError {
     pub fn new(msg: &str) -> ListMslFilesError {
-        ListMslFilesError { details: msg.to_string() }
+        ListMslFilesError {
+            details: msg.to_string(),
+        }
     }
 }
 
@@ -223,16 +238,24 @@ impl fmt::Display for ListMslFilesError {
 }
 
 // List all the files for a bucket
-pub fn list_msl_bucket_files(logname: &str, datastore: &DataStore) -> Result<Vec<String>, ListMslFilesError> {
+pub fn list_msl_bucket_files(
+    logname: &str,
+    datastore: &DataStore,
+) -> Result<Vec<String>, ListMslFilesError> {
     let s3_client = client_for_datastore(datastore);
-    let files = match s3_client.list_objects(ListObjectsRequest {
-        bucket: datastore.bucket.clone(),
-        prefix: Some(format!("minsql/{}", logname)),
-        ..Default::default()
-    }).sync() {
+    let files = match s3_client
+        .list_objects(ListObjectsRequest {
+            bucket: datastore.bucket.clone(),
+            prefix: Some(format!("minsql/{}", logname)),
+            ..Default::default()
+        })
+        .sync()
+    {
         Ok(l) => l,
         Err(e) => {
-            return Err(ListMslFilesError::new(&format!("Could not list files in datastore: {}", e)[..]));
+            return Err(ListMslFilesError::new(
+                &format!("Could not list files in datastore: {}", e)[..],
+            ));
         }
     };
     let mut msl_files = Vec::new();
@@ -248,14 +271,19 @@ pub fn list_msl_bucket_files(logname: &str, datastore: &DataStore) -> Result<Vec
 // Return the contents of a file from a datastore
 pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, ListMslFilesError> {
     let s3_client = client_for_datastore(datastore);
-    let files = match s3_client.get_object(GetObjectRequest {
-        bucket: datastore.bucket.clone(),
-        key: key.clone(),
-        ..Default::default()
-    }).sync() {
+    let files = match s3_client
+        .get_object(GetObjectRequest {
+            bucket: datastore.bucket.clone(),
+            key: key.clone(),
+            ..Default::default()
+        })
+        .sync()
+    {
         Ok(l) => l,
         Err(e) => {
-            return Err(ListMslFilesError::new(&format!("Could not list files in datastore: {}", e)[..]));
+            return Err(ListMslFilesError::new(
+                &format!("Could not list files in datastore: {}", e)[..],
+            ));
         }
     };
 
