@@ -1,5 +1,5 @@
-// MinSQL
-// Copyright (C) 2019  MinIO
+// This file is part of MinSQL
+// Copyright (c) 2019 MinIO, Inc.s
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published by

@@ -1,5 +1,5 @@
-// MinSQL
-// Copyright (C) 2019  MinIO
+// This file is part of MinSQL
+// Copyright (c) 2019 MinIO, Inc.
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Affero General Public License as published by
@@ -511,12 +511,7 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                         scan_flags = scan_flags | flag;
                     }
                 }
-//                println!("flags: {:?}", scan_flags);
-//
-//                println!("Read all: {}", read_all);
-//                println!("Positionals : {:?}", positional_fields);
-//                println!("Smarts : {:?}", smart_fields);
-//                println!("ordered  : {:?}", projections_ordered);
+
                 // we keep track of the parsing of the queries in order
                 let query_string = query.to_string();
                 queries_parse.insert(query_string, QueryParsing {
@@ -570,7 +565,7 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                         let msl_files = match list_msl_bucket_files(&log.name[..], &ds) {
                             Ok(mf) => mf,
                             Err(e) => {
-                                //TODO: Handler Error. Ideally we should end the channel and terminate the stream
+                                // TODO: Handler Error. Ideally, we should end the channel and terminate the stream
                                 // use take_while http://xion.io/post/code/rust-stream-terminate.html with Result
                                 error!("error reading files from minIO {:?}", e);
                                 Vec::new()
@@ -586,7 +581,7 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                                 Ok(l) => l,
                                 Err(e) => {
                                     error!("problem reading file {}", e);
-                                    //TODO: Handle error. Ideally we want to stop the channel
+                                    // TODO: Handle error. Ideally, we want to stop the channel
                                     "".to_string()
                                 }
                             };
@@ -600,7 +595,7 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                                 let query_data = queries_parse.get(&query.to_string()[..]).unwrap();
                                 // if we have position columns, process
                                 if query_data.positional_fields.len() > 0 {
-                                    //TODO: Use separator construct from header
+                                    // TODO: Use separator construct from header
                                     let parts: Vec<&str> = line.split(" ").collect();
                                     for pos in &query_data.positional_fields {
                                         if pos.position - 1 < (parts.len() as i32) {
