@@ -1,4 +1,4 @@
-// This file is part of the MinSQL
+// This file is part of MinSQL
 // Copyright (c) 2019 MinIO, Inc.s
 //
 // This program is free software: you can redistribute it and/or modify
