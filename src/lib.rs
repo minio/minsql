@@ -36,21 +36,21 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::{future, Future, Stream};
-use hyper::Server;
 use hyper::service::service_fn;
+use hyper::Server;
 use tokio::timer::Interval;
 
 use crate::config::Config;
 use crate::ingest::flush_buffer;
 use crate::ingest::IngestBuffer;
 
-mod constants;
 mod config;
-mod http;
-mod storage;
-mod query;
+mod constants;
 mod dialect;
+mod http;
 mod ingest;
+mod query;
+mod storage;
 
 pub fn run() {
     // Load the configuration file
@@ -80,34 +80,47 @@ pub fn run() {
         log_ingest_buffers_map.insert(log.name.clone(), Mutex::new(IngestBuffer::new()));
     }
 
-    let log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>> = Arc::new(log_ingest_buffers_map);
+    let log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>> =
+        Arc::new(log_ingest_buffers_map);
     // create a referece to the hashmap that we will share across intervals below
     let ingest_buffer_interval = Arc::clone(&log_ingest_buffers);
 
-
-    let addr = cfg.server.as_ref().unwrap().address.as_ref().unwrap().parse().unwrap();
+    let addr = cfg
+        .server
+        .as_ref()
+        .unwrap()
+        .address
+        .as_ref()
+        .unwrap()
+        .parse()
+        .unwrap();
 
     let cfg = Box::new(cfg);
     let cfg: &'static _ = Box::leak(cfg);
 
     hyper::rt::run(future::lazy(move || {
-
         // for each log, start an interval to flush data at window speed, as long as the
         // commit window is not 0
         for log in &cfg.log {
             let ingest_buffer2 = Arc::clone(&ingest_buffer_interval);
             if log.commit_window != "0" {
                 let log_name = log.name.clone();
-                info!("Starting flusing loop for {} at {}", &log_name, &log.commit_window);
+                info!(
+                    "Starting flusing loop for {} at {}",
+                    &log_name, &log.commit_window
+                );
 
-                let task = Interval::new(Instant::now(), Duration::from_secs(Config::commit_window_to_seconds(&log.commit_window)))
-                    .for_each(move |_| {
-                        let ingest_buffer3 = Arc::clone(&ingest_buffer2);
-                        let log_name = log_name.clone();
-                        flush_buffer(&log_name, &cfg, ingest_buffer3);
-                        Ok(())
-                    })
-                    .map_err(|e| panic!("interval errored; err={:?}", e));
+                let task = Interval::new(
+                    Instant::now(),
+                    Duration::from_secs(Config::commit_window_to_seconds(&log.commit_window)),
+                )
+                .for_each(move |_| {
+                    let ingest_buffer3 = Arc::clone(&ingest_buffer2);
+                    let log_name = log_name.clone();
+                    flush_buffer(&log_name, &cfg, ingest_buffer3);
+                    Ok(())
+                })
+                .map_err(|e| panic!("interval errored; err={:?}", e));
                 hyper::rt::spawn(task);
             }
         }

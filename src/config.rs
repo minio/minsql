@@ -55,7 +55,6 @@ pub struct Log {
     pub commit_window: String,
 }
 
-
 #[derive(Serialize, Deserialize, Clone)]
 pub struct LogAuth {
     pub token: String,
@@ -101,21 +100,21 @@ impl Config {
                 };
                 seconds
             }
-            _ => {
-                0 as u64
-            }
+            _ => 0 as u64,
         }
     }
 }
 
 #[derive(Debug)]
 pub struct ConfigurationError {
-    details: String
+    details: String,
 }
 
 impl ConfigurationError {
     pub fn new(msg: &str) -> ConfigurationError {
-        ConfigurationError { details: msg.to_string() }
+        ConfigurationError {
+            details: msg.to_string(),
+        }
     }
 }
 
@@ -137,12 +136,12 @@ pub fn load_configuration() -> Result<Config, ConfigurationError> {
     // try to read the file
     let contents = match fs::read_to_string(filename) {
         Ok(f) => f,
-        Err(_) => return Err(ConfigurationError::new("Could not read configuration file"))
+        Err(_) => return Err(ConfigurationError::new("Could not read configuration file")),
     };
     // try to parse the toml string
     let configuration: Config = match toml::from_str(&contents) {
         Ok(t) => t,
-        Err(e) => return Err(ConfigurationError::new(&format!("{}", e)[..]))
+        Err(e) => return Err(ConfigurationError::new(&format!("{}", e)[..])),
     };
     Ok(configuration)
 }
