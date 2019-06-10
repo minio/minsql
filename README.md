@@ -10,14 +10,17 @@ cargo build --release
 ```
 
 ## Running the project
-To run the project you may specify a `.toml` configuration file, if none is specified *minSQL* will attempt to look for a `config.toml` file.
+
+An instance of [MinIO](https://github.com/minio/minio) is needed as the storage engine for MinSQL.
+
+To run the project you may specify a `.toml` configuration file, if none is specified *MinSQL* will attempt to look for a `config.toml` file.
 ```bash
  minsql config.toml
 ```
 A sample configuration file can be found at `config.toml.template`
 
 # Storing logs
-For a log `mylog` defined on the `config.toml` we can store logs on *minSQL* by performing a `PUT` to our `minSQL` instance
+For a log `mylog` defined on the `config.toml` we can store logs on *MinSQL* by performing a `PUT` to our `MinSQL` instance
 
 ```bash
 curl -X PUT \
@@ -29,16 +32,16 @@ You can send multiple log lines separated by `new line`
 
 # Querying logs
 
-To get data out of minSQL you can use SQL. Note data minSQL is a data layer and not a computation layer, therefore certain SQL statements that need computations (SUM, MAX, GROUP BY, JOIN, etc...) are not supported.
+To get data out of MinSQL you can use SQL. Note data MinSQL is a data layer and not a computation layer, therefore certain SQL statements that need computations (SUM, MAX, GROUP BY, JOIN, etc...) are not supported.
 
-All the query statements must be sent via `POST` to your minsql instance.
+All the query statements must be sent via `POST` to your MinSQL instance.
 
 # SELECT
 To select all the logs for a particular log you can perform a simple SELECT statement
  ```sql
  SELECT * FROM mylog
  ```
- And send that to minSQL via POST
+ And send that to MinSQL via POST
  ```bash
 curl -X POST \
   http://127.0.0.1:9999/search \
@@ -69,13 +72,13 @@ curl -X POST \
 This will return result of the first query and then start streaming the result of the second query and so on.
 
 ## Select parts of the data
-We can get only parts of the data by using any of the supported minSQL entities, which start with a `$` sign.
+We can get only parts of the data by using any of the supported MinSQL entities, which start with a `$` sign.
 ### Positional 
 We can select from the data by it's position, for example to get the first column and the fourth we can use `$1` and `$4`
 ```sql
 SELECT $1, $4 FROM mylog;
 ```
-To which minSQL will reply 
+To which MinSQL will reply 
 ```bash
 67.164.164.165 [24/Jul/2017:00:16:46 
 67.164.164.165 [24/Jul/2017:00:16:48
@@ -83,7 +86,7 @@ To which minSQL will reply
 45.23.126.92 [24/Jul/2017:00:16:18
 ```
 
-You can see that the data was selected as is, however the selected date column is not clean enough, minSQL provides other entities to deal with this.
+You can see that the data was selected as is, however the selected date column is not clean enough, MinSQL provides other entities to deal with this.
 
 ### Select by type
 
@@ -91,7 +94,7 @@ MinSQL provides a nice list of entities that make the extraction of chunks data 
 ```sql
 SELECT $ip, $date FROM mylog
 ```
-To which minSQL will reply
+To which MinSQL will reply
 ```bash
 67.164.164.165 24/Jul/2017
 67.164.164.165 24/Jul/2017
@@ -108,7 +111,7 @@ SELECT $ip, $ip2, $ip3, $date FROM mylog
 Please note that if no positional number is specified on an entity, it will default to the first position, in this case `$ip == $ip1`
 
 # Filtering
-Using the powerful select engine of minSQL you can also filter the data so only the relevant information that you need to extract from your logs is returned.
+Using the powerful select engine of MinSQL you can also filter the data so only the relevant information that you need to extract from your logs is returned.
 
 For example, to filter out a single ip from your logs you could select by `$ip`
 
@@ -116,7 +119,7 @@ For example, to filter out a single ip from your logs you could select by `$ip`
 SELECT * FROM mylog WHERE $ip = '67.164.164.165'
 ```
 
-To which minSQL will reply only with the matched lines
+To which MinSQL will reply only with the matched lines
 
 ```bash
 67.164.164.165 - - [24/Jul/2017:00:16:46 +0000] "GET /info.php HTTP/1.1" 200 24564 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36"
@@ -135,7 +138,7 @@ This query would return all the log lines conaining the word `Intel` that also c
 
 # Entities
 
-A list of supported entities by minSQL:
+A list of supported entities by MinSQL:
 
 * *$line*: Represents the whole log line
 * *$ip*: Selects any format of ipv4
