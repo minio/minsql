@@ -40,6 +40,7 @@ use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::storage::list_msl_bucket_files;
 use crate::storage::read_file;
+use crate::auth::token_has_access_to_log;
 
 bitflags! {
     // ScanFlags determine which regex should be evaluated
@@ -214,12 +215,14 @@ struct QueryParsing {
 }
 
 // performs a query on a log
-pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFuture {
+pub fn api_log_search(cfg: &'static Config, req: Request<Body>, access_token: &String) -> ResponseFuture {
     let start = Instant::now();
     lazy_static! {
         static ref SMART_FIELDS_RE: Regex =
             Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
     };
+
+    let access_token = access_token.clone();
 
     // A web api to run against
     Box::new(req.into_body()
@@ -273,6 +276,15 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                         .status(StatusCode::BAD_REQUEST)
                         .header(header::CONTENT_TYPE, "text/plain")
                         .body(Body::from("No table was found in the query statement"))?;
+                    return Ok(response);
+                }
+
+                // check if we have access for the requested table
+                if !token_has_access_to_log(&cfg, &access_token[..], &some_table.unwrap().to_string()) {
+                    let response = Response::builder()
+                        .status(StatusCode::UNAUTHORIZED)
+                        .header(header::CONTENT_TYPE, "text/plain")
+                        .body(Body::from("Unauthorized"))?;
                     return Ok(response);
                 }
 
@@ -553,7 +565,7 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                     let log = cfg.get_log(&table).unwrap();
 
                     let log = log.clone();
-                    let my_ds:Vec<DataStore> = cfg.datastore.iter().map(|(x,y)| y.clone()).collect();
+                    let my_ds:Vec<DataStore> = cfg.datastore.iter().map(|(_,y)| y.clone()).collect();
                     let queries_parse = queries_parse.clone();
                     let query = query.clone();
                     stream::iter_ok(my_ds).fold(tx, move |tx, ds| {

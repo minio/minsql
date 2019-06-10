@@ -36,8 +36,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::{future, Future, Stream};
-use hyper::service::service_fn;
 use hyper::Server;
+use hyper::service::service_fn;
 use tokio::timer::Interval;
 
 use crate::config::Config;
@@ -51,6 +51,7 @@ mod http;
 mod ingest;
 mod query;
 mod storage;
+mod auth;
 
 pub fn run() {
     // Load the configuration file
@@ -64,7 +65,6 @@ pub fn run() {
 
     // Validate all datastore for reachability
     for (ds_name, ds) in cfg.datastore.iter() {
-        println!("{}", serde_json::to_string(ds).unwrap());
         // if we find a bad datastore, for now let's panic
         if storage::can_reach_datastore(&ds) == false {
             error!("{} is not a reachable datastore", &ds_name);

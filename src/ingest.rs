@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use futures::{Future, Stream};
+use futures::{Future, Stream, future};
 use hyper::header;
 use hyper::Body;
 use hyper::Request;
@@ -27,7 +27,7 @@ use hyper::StatusCode;
 
 use crate::config::Config;
 use crate::http::requested_log_from_request;
-use crate::http::return_404_future;
+use crate::http::return_404;
 use crate::http::ResponseFuture;
 use crate::storage::write_to_datastore;
 
@@ -86,7 +86,7 @@ pub fn api_log_store(
         Ok(ln) => ln,
         Err(e) => {
             error!("{}", e);
-            return return_404_future();
+            return Box::new(future::ok(return_404()));
         }
     };
     // make a clone of the config for the closure
