@@ -63,10 +63,11 @@ pub fn run() {
     };
 
     // Validate all datastore for reachability
-    for ds in cfg.datastore.iter() {
+    for (ds_name, ds) in cfg.datastore.iter() {
+        println!("{}", serde_json::to_string(ds).unwrap());
         // if we find a bad datastore, for now let's panic
-        if storage::can_reach_datastore(ds) == false {
-            error!("{} is not a reachable datastore", ds.name.clone().unwrap());
+        if storage::can_reach_datastore(&ds) == false {
+            error!("{} is not a reachable datastore", &ds_name);
             process::exit(0x0100);
         }
     }
@@ -76,8 +77,8 @@ pub fn run() {
     let mut log_ingest_buffers_map: HashMap<String, Mutex<IngestBuffer>> = HashMap::new();
 
     // for each log, initialize an ingest buffer
-    for log in &cfg.log {
-        log_ingest_buffers_map.insert(log.name.clone(), Mutex::new(IngestBuffer::new()));
+    for (log_name, _) in &cfg.log {
+        log_ingest_buffers_map.insert(log_name.clone(), Mutex::new(IngestBuffer::new()));
     }
 
     let log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>> =
@@ -101,10 +102,10 @@ pub fn run() {
     hyper::rt::run(future::lazy(move || {
         // for each log, start an interval to flush data at window speed, as long as the
         // commit window is not 0
-        for log in &cfg.log {
+        for (log_name, log) in &cfg.log {
             let ingest_buffer2 = Arc::clone(&ingest_buffer_interval);
             if log.commit_window != "0" {
-                let log_name = log.name.clone();
+                let log_name = log_name.clone();
                 info!(
                     "Starting flusing loop for {} at {}",
                     &log_name, &log.commit_window

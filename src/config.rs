@@ -25,8 +25,8 @@ use std::fs;
 pub struct Config {
     pub version: String,
     pub server: Option<Server>,
-    pub datastore: Vec<DataStore>,
-    pub log: Vec<Log>,
+    pub datastore: HashMap<String, DataStore>,
+    pub log: HashMap<String, Log>,
     pub auth: HashMap<String, HashMap<String, LogAuth>>,
 }
 
@@ -50,7 +50,7 @@ pub struct DataStore {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Log {
-    pub name: String,
+    pub name: Option<String>,
     pub datastores: Vec<String>,
     pub commit_window: String,
 }
@@ -65,12 +65,7 @@ pub struct LogAuth {
 
 impl Config {
     pub fn get_log(&self, logname: &String) -> Option<&Log> {
-        for log in &self.log {
-            if log.name == *logname {
-                return Some(log);
-            }
-        }
-        None
+        self.log.get(&logname[..])
     }
     // Translates a string duration to an unsigned integer
     // for example, "5s" returns 5
@@ -139,10 +134,18 @@ pub fn load_configuration() -> Result<Config, ConfigurationError> {
         Err(_) => return Err(ConfigurationError::new("Could not read configuration file")),
     };
     // try to parse the toml string
-    let configuration: Config = match toml::from_str(&contents) {
+    let mut configuration: Config = match toml::from_str(&contents) {
         Ok(t) => t,
         Err(e) => return Err(ConfigurationError::new(&format!("{}", e)[..])),
     };
+    // store datasource names in the structs
+    for (name, ds) in &mut configuration.datastore {
+        ds.name = Some(name.clone());
+    }
+    // store log names in the structs
+    for (name, log) in &mut configuration.log {
+        log.name = Some(name.clone());
+    }
     Ok(configuration)
 }
 
