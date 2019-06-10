@@ -17,6 +17,7 @@ use std::fmt;
 use std::io::Error as IoError;
 use std::time::Instant;
 
+use rand::distributions::{IndependentSample, Range};
 use chrono::{Datelike, Timelike, Utc};
 //use chrono::DateTime;
 use futures::future::result;
@@ -36,6 +37,8 @@ use rusoto_s3::{
 use uuid::Uuid;
 
 use crate::config::{Config, DataStore};
+use std::hash::Hash;
+use std::collections::HashMap;
 
 //use rusoto_core::RusotoError;
 
@@ -126,7 +129,7 @@ fn client_for_datastore(datastore: &DataStore) -> S3Client {
 // <p>Function used to verify if a datastore is valid in terms of reachability</p>
 pub fn can_reach_datastore(datastore: &DataStore) -> bool {
     // Get the Object Storage client
-    let s3_client = client_for_datastore(datastore);
+    let s3_client = client_for_datastore(&datastore);
     // perform list call to verify we have access
     let can_reach = match s3_client
         .list_objects(ListObjectsRequest {
@@ -178,7 +181,8 @@ pub fn write_to_datastore(
     payload: &String,
 ) -> Result<bool, WriteDatastoreError> {
     let start = Instant::now();
-    let datastore = &cfg.datastore[0];
+    // Select a datastore at random to write to
+    let datastore = rand_datastore(&cfg.datastore).unwrap();
     // Get the Object Storage client
     let s3_client = client_for_datastore(datastore);
     let now = Utc::now();
@@ -292,4 +296,13 @@ pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, ListMslF
     let body = String::from_utf8(bytes).unwrap();
 
     Ok(body)
+}
+
+/// Selects a datastore at random
+fn rand_datastore<K: Eq + Hash, V>(hash: &HashMap<K, V>) -> Option<&V> {
+    if hash.is_empty() {
+        return None;
+    }
+    let index = Range::new(0, hash.len()).ind_sample(&mut rand::thread_rng());
+    hash.values().skip(index).next()
 }

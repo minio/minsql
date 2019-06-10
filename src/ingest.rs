@@ -125,7 +125,8 @@ pub fn api_log_store(
                     Ok(response)
                 } else {
                     // buffer the message
-                    let ingest_buffer = log_ingest_buffers.get(&log.name[..]).unwrap();
+                    let log_name = log.name.clone().unwrap();
+                    let ingest_buffer = log_ingest_buffers.get(&log_name[..]).unwrap();
                     let mut protected_data = ingest_buffer.lock().unwrap();
                     protected_data.total_bytes += payload.len() as u64;
                     protected_data.data.push(payload.clone());
@@ -134,7 +135,6 @@ pub fn api_log_store(
                     // if we are above storage threshold, we will flush the data
                     if total_bytes > 5 * 1024 * 1024 {
                         info!("Buffer above 5MB, flushing.");
-                        let log_name = log.name.clone();
                         hyper::rt::spawn({
                             flush_buffer(&log_name, &cfg, log_ingest_buffers);
                             futures::future::ok(())
