@@ -17,8 +17,8 @@ use std::fmt;
 use std::io::Error as IoError;
 use std::time::Instant;
 
-use rand::distributions::{IndependentSample, Range};
 use chrono::{Datelike, Timelike, Utc};
+use rand::distributions::{IndependentSample, Range};
 //use chrono::DateTime;
 use futures::future::result;
 use futures::future::FutureResult;
@@ -37,8 +37,8 @@ use rusoto_s3::{
 use uuid::Uuid;
 
 use crate::config::{Config, DataStore};
-use std::hash::Hash;
 use std::collections::HashMap;
+use std::hash::Hash;
 
 //use rusoto_core::RusotoError;
 

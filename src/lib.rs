@@ -36,14 +36,15 @@ use std::time::Duration;
 use std::time::Instant;
 
 use futures::{future, Future, Stream};
-use hyper::Server;
 use hyper::service::service_fn;
+use hyper::Server;
 use tokio::timer::Interval;
 
 use crate::config::Config;
 use crate::ingest::flush_buffer;
 use crate::ingest::IngestBuffer;
 
+mod auth;
 mod config;
 mod constants;
 mod dialect;
@@ -51,7 +52,6 @@ mod http;
 mod ingest;
 mod query;
 mod storage;
-mod auth;
 
 pub fn run() {
     // Load the configuration file
@@ -115,13 +115,13 @@ pub fn run() {
                     Instant::now(),
                     Duration::from_secs(Config::commit_window_to_seconds(&log.commit_window)),
                 )
-                    .for_each(move |_| {
-                        let ingest_buffer3 = Arc::clone(&ingest_buffer2);
-                        let log_name = log_name.clone();
-                        flush_buffer(&log_name, &cfg, ingest_buffer3);
-                        Ok(())
-                    })
-                    .map_err(|e| panic!("interval errored; err={:?}", e));
+                .for_each(move |_| {
+                    let ingest_buffer3 = Arc::clone(&ingest_buffer2);
+                    let log_name = log_name.clone();
+                    flush_buffer(&log_name, &cfg, ingest_buffer3);
+                    Ok(())
+                })
+                .map_err(|e| panic!("interval errored; err={:?}", e));
                 hyper::rt::spawn(task);
             }
         }

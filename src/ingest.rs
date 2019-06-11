@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use futures::{Future, Stream, future};
+use futures::{future, Future, Stream};
 use hyper::header;
 use hyper::Body;
 use hyper::Request;

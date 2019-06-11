@@ -29,6 +29,7 @@ use sqlparser::sqlparser::Parser;
 use sqlparser::sqlparser::ParserError;
 use tokio::sync::mpsc;
 
+use crate::auth::token_has_access_to_log;
 use crate::config::{Config, DataStore};
 use crate::constants::SF_DATE;
 use crate::constants::SF_EMAIL;
@@ -40,7 +41,6 @@ use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::storage::list_msl_bucket_files;
 use crate::storage::read_file;
-use crate::auth::token_has_access_to_log;
 
 bitflags! {
     // ScanFlags determine which regex should be evaluated
@@ -215,7 +215,11 @@ struct QueryParsing {
 }
 
 // performs a query on a log
-pub fn api_log_search(cfg: &'static Config, req: Request<Body>, access_token: &String) -> ResponseFuture {
+pub fn api_log_search(
+    cfg: &'static Config,
+    req: Request<Body>,
+    access_token: &String,
+) -> ResponseFuture {
     let start = Instant::now();
     lazy_static! {
         static ref SMART_FIELDS_RE: Regex =

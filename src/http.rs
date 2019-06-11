@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use futures::{future, Future, stream, Stream};
 use futures::Sink;
+use futures::{future, stream, Future, Stream};
 use hyper::{Body, Chunk, Method, Request, Response, StatusCode};
 
 use crate::auth::token_has_access_to_log;
@@ -31,7 +31,7 @@ use crate::query::api_log_search;
 //type ChunkStream = Box<Stream<Item = Chunk, Error = hyper::Error>>;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
-pub type ResponseFuture = Box<Future<Item=Response<Body>, Error=GenericError> + Send>;
+pub type ResponseFuture = Box<Future<Item = Response<Body>, Error = GenericError> + Send>;
 
 static INDEX_BODY: &[u8] = b"MinSQL";
 static NOTFOUND_BODY: &[u8] = b"Not Found";
@@ -85,7 +85,6 @@ pub fn return_400(message: &str) -> Response<Body> {
         .body(body)
         .unwrap()
 }
-
 
 pub fn requested_log_from_request(req: &Request<Body>) -> Result<RequestedLog, RequestedLogError> {
     let request_path_no_slash = String::from(&req.uri().path()[1..]);
@@ -176,7 +175,6 @@ pub fn request_router(
             return Box::new(future::ok(return_401()));
         }
 
-
         match (req.method(), &requested_log.method[..]) {
             (&Method::PUT, "store") => api_log_store(cfg, req, log_ingest_buffers),
             _ => {
@@ -200,18 +198,17 @@ enum HeaderToken {
 fn validate_token_from_header(cfg: &'static Config, req: &Request<Body>) -> HeaderToken {
     let access_key_result = match req.headers().get("MINSQL-TOKEN") {
         Some(val) => val.to_str(),
-        None => return HeaderToken::NoToken
+        None => return HeaderToken::NoToken,
     };
     let access_key = match access_key_result {
         Ok(val) => val,
-        Err(_) => return HeaderToken::InvalidToken
+        Err(_) => return HeaderToken::InvalidToken,
     };
     match cfg.auth.get(access_key) {
         Some(_) => return HeaderToken::Token(access_key.to_string()),
-        None => return HeaderToken::InvalidToken
+        None => return HeaderToken::InvalidToken,
     }
 }
-
 
 #[cfg(test)]
 mod http_tests {
@@ -222,12 +219,15 @@ mod http_tests {
     // Generates a Config object with only one auth item for one log
     fn get_auth_config_for(token: String, log_name: String) -> Config {
         let mut log_auth_map: HashMap<String, LogAuth> = HashMap::new();
-        log_auth_map.insert(log_name, LogAuth {
-            token: token.clone(),
-            api: Vec::new(),
-            expire: "".to_string(),
-            status: "".to_string(),
-        });
+        log_auth_map.insert(
+            log_name,
+            LogAuth {
+                token: token.clone(),
+                api: Vec::new(),
+                expire: "".to_string(),
+                status: "".to_string(),
+            },
+        );
 
         let mut auth = HashMap::new();
         auth.insert(token.clone(), log_auth_map);
@@ -258,7 +258,6 @@ mod http_tests {
         let cfg = Box::new(cfg);
         let cfg: &'static _ = Box::leak(cfg);
 
-
         let req: Request<Body>;
 
         let mut req2 = Request::builder();
@@ -268,14 +267,15 @@ mod http_tests {
         }
         req = req2.body(Body::from("test")).unwrap();
 
-
         let result = validate_token_from_header(&cfg, &req);
         match case.expected {
-            HeaderToken::Token(_) => assert_eq!(result, HeaderToken::Token(case.expected_token.unwrap_or_else(||{"".to_string()}))),
+            HeaderToken::Token(_) => assert_eq!(
+                result,
+                HeaderToken::Token(case.expected_token.unwrap_or_else(|| { "".to_string() }))
+            ),
             other => assert_eq!(result, other),
         }
     }
-
 
     #[test]
     fn valid_token_header() {
