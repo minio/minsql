@@ -1,6 +1,6 @@
 # MinSQL
 
-MinSQL is a log search engine designed with simplicity in mind to the extend that no SDK is needed to interact with it, most programming languages and tools have some form of http request capability (ie: curl) and that's all you need to interact with minSQL. 
+MinSQL is a log search engine designed with simplicity in mind to the extend that no SDK is needed to interact with it, most programming languages and tools have some form of http request capability (ie: curl) and that's all you need to interact with MinSQL. 
 
 ## To build
 
@@ -147,5 +147,5 @@ A list of supported entities by MinSQL:
 * *$ip*: Selects any format of ipv4
 * *$date*: Any format of date containing date, month and year.
 * *$email*: Any email@address.com
-* *$quotedtext*: any text that is withing single quotes (') or double quotes (")
+* *$quoted*: any text that is withing single quotes (') or double quotes (")
 * *$url*: any url starting with http

@@ -260,7 +260,7 @@ pub fn list_msl_bucket_files(
     let mut msl_files = Vec::new();
     for file in files.contents.unwrap() {
         let fkey = file.key.unwrap();
-        if fkey.contains(".msl") {
+        if fkey.contains(".log") {
             msl_files.push(fkey)
         }
     }
