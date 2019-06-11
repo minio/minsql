@@ -4,16 +4,19 @@ version = "1"
    address = "0.0.0.0:9999"
 
 # List as many minIO instances to store and retrieve the logs
-[[datastore]]
-name = "myminio"
-endpoint = "http://localhost:9000"
-access_key = "minio"
-secret_key = "minio123"
-bucket = "mindev"
-prefix = ""
+[datastore]
+[datastore.myminio]
+    endpoint = "http://localhost:9000"
+    access_key = "minio"
+    secret_key = "minio123"
+    bucket = "mindev"
+    prefix = ""
 
 # Define the logs that are available
-[[log]]
-name = "mylog"
-datastores = ["myminio"]
-commit_window = "0s"
+[log]
+[log.mylog]
+    name = "mylog"
+    # A log can be stored across multiple datastores
+    datastores = ["myminio"]
+    # How long should data be buffered on MinSQL before it's commited to MinIO
+    commit_window = "5s"

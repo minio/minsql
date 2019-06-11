@@ -17,9 +17,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error;
 use std::fmt;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use futures::future::FutureResult;
 use futures::Sink;
 use futures::{stream, Future, Stream};
 use hyper::{header, Body, Chunk, Request, Response, StatusCode};
@@ -56,13 +56,13 @@ bitflags! {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct PositionalColumn {
     position: i32,
     alias: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct SmartColumn {
     // $ip, $email...
     typed: String,
@@ -92,7 +92,7 @@ impl error::Error for ParseSqlError {
     }
 }
 
-pub fn parse_query(entire_body: Chunk) -> FutureResult<Vec<SQLStatement>, GenericError> {
+pub fn parse_query(entire_body: Chunk) -> Result<Vec<SQLStatement>, GenericError> {
     let payload: String = match String::from_utf8(entire_body.to_vec()) {
         Ok(str) => str,
         Err(err) => panic!("Couldn't convert buffer to string: {}", err),
@@ -100,11 +100,9 @@ pub fn parse_query(entire_body: Chunk) -> FutureResult<Vec<SQLStatement>, Generi
 
     // attempt to parse the payload
     let dialect = MinSQLDialect {};
-    //    let ast = Parser::parse_sql(&dialect, payload.clone());
 
-    //    futures::future::result(ast)
     match Parser::parse_sql(&dialect, payload.clone()) {
-        Ok(q) => futures::future::ok(q),
+        Ok(q) => Ok(q),
         Err(e) => {
             // Unable to parse query, match reason
             match e {
@@ -116,23 +114,21 @@ pub fn parse_query(entire_body: Chunk) -> FutureResult<Vec<SQLStatement>, Generi
                 }
             }
             // TODO: Design a more informative error message
-            futures::future::err::<Vec<SQLStatement>, GenericError>(ParseSqlError.into())
+            Err(ParseSqlError.into())
         }
     }
 }
 
-pub fn validate_logs(
-    cfg: &Config,
-    ast: Vec<SQLStatement>,
-) -> FutureResult<Vec<SQLStatement>, GenericError> {
-    // Validate all the tables for all the queries, we don't want to start serving content
+pub fn validate_logs(cfg: &Config, ast: &Vec<SQLStatement>) -> Option<GenericError> {
+    // Validate all the tables for all the  queries, we don't want to start serving content
     // for the first query and then discover subsequent queries are invalid
-    for query in &ast {
+    for query in ast {
         // find the table they want to query
         let some_table = match query {
-            sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => match q.body {
+            sqlparser::sqlast::SQLStatement::SQLQuery(q) => match q.body {
+                // TODO: Validate a single table
                 sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                    bodyselect.relation.clone()
+                    Some(bodyselect.from[0].relation.clone())
                 }
                 _ => None,
             },
@@ -143,16 +139,15 @@ pub fn validate_logs(
         };
         if some_table == None {
             error!("No table found");
-            return futures::future::err::<Vec<SQLStatement>, GenericError>(ParseSqlError.into());
+            return Some(ParseSqlError.into());
         }
         let table = some_table.unwrap().to_string();
         let loggy = cfg.get_log(&table);
         if loggy.is_none() {
-            return futures::future::err::<Vec<SQLStatement>, GenericError>(ParseSqlError.into());
+            return Some(ParseSqlError.into());
         }
     }
-
-    futures::future::ok(ast)
+    None
 }
 
 pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> {
@@ -205,13 +200,17 @@ pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> 
     results
 }
 
+/// This struct represents the reading and filtering parameters that MinSQL uses to filter and
+/// format the returned data.
 #[derive(Debug, Clone)]
 struct QueryParsing {
+    log_name: String,
     read_all: bool,
     scan_flags: ScanFlags,
     positional_fields: Vec<PositionalColumn>,
     smart_fields: Vec<SmartColumn>,
     projections_ordered: Vec<String>,
+    limit: Option<u64>,
 }
 
 // performs a query on a log
@@ -221,10 +220,6 @@ pub fn api_log_search(
     access_token: &String,
 ) -> ResponseFuture {
     let start = Instant::now();
-    lazy_static! {
-        static ref SMART_FIELDS_RE: Regex =
-            Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
-    };
 
     let access_token = access_token.clone();
 
@@ -232,309 +227,64 @@ pub fn api_log_search(
     Box::new(req.into_body()
         .concat2() // Concatenate all chunks in the body
         .from_err()
-        .and_then(parse_query)
-        .map_err(|e| {
-            error!("----{}", e);
-            e
-        })
-        .and_then(move |ast| validate_logs(&cfg, ast))
-        .map_err(|e| {
-            error!("----{}", e);
-            e
-        })
-        .and_then(move |ast| {
-            let mut queries_parse: HashMap<String, QueryParsing> = HashMap::new();
-
-            // We are going to validate the whole payload.
-            // Make sure tables are valid, projections are valid and filtering operations are supported
-            for query in &ast {
-                // find the table they want to query
-                let some_table = match query {
-                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
-                        match q.body {
-                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                                bodyselect.relation.clone()
-                            }
-                            _ => {
-                                error!("No table found");
-                                let response = Response::builder()
-                                    .status(StatusCode::BAD_REQUEST)
-                                    .header(header::CONTENT_TYPE, "text/plain")
-                                    .body(Body::from("fail"))?;
-                                return Ok(response);
-                            }
-                        }
-                    }
-                    _ => {
-                        error!("Not the type of query we support");
-                        let response = Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .header(header::CONTENT_TYPE, "text/plain")
-                            .body(Body::from("Unsupported query"))?;
-                        return Ok(response);
-                    }
-                };
-                if some_table == None {
-                    error!("No table found");
+        .and_then(move |entire_body| {
+            let ast = match parse_query(entire_body) {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("Problem parsing query {:?}", e);
                     let response = Response::builder()
                         .status(StatusCode::BAD_REQUEST)
                         .header(header::CONTENT_TYPE, "text/plain")
-                        .body(Body::from("No table was found in the query statement"))?;
+                        .body(Body::from("Bad request"))?;
                     return Ok(response);
                 }
-
-                // check if we have access for the requested table
-                if !token_has_access_to_log(&cfg, &access_token[..], &some_table.unwrap().to_string()) {
+            };
+            match validate_logs(&cfg, &ast) {
+                None => (),
+                Some(_) => {
                     let response = Response::builder()
-                        .status(StatusCode::UNAUTHORIZED)
+                        .status(StatusCode::BAD_REQUEST)
                         .header(header::CONTENT_TYPE, "text/plain")
-                        .body(Body::from("Unauthorized"))?;
+                        .body(Body::from("Invalid log name"))?;
                     return Ok(response);
                 }
-
-                // determine our read strategy
-                let read_all = match query {
-                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
-                        match q.body {
-                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                                let mut is_wildcard = false;
-                                for projection in &bodyselect.projection {
-                                    if *projection == sqlparser::sqlast::SQLSelectItem::Wildcard {
-                                        is_wildcard = true
-                                    }
-                                }
-                                is_wildcard
-                            }
-                            _ => {
-                                false
-                            }
-                        }
+            };
+            // Translate the SQL AST into a `QueryParsing` that has all the elements needed to continue
+            let queries_parse = match process_sql(&cfg, &access_token, &ast) {
+                ProcessedQuery::TranslatedQuery(v) => v,
+                ProcessedQuery::Error(f) => match f {
+                    ProcessingQueryError::Fail(s) => {
+                        let response = Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .header(header::CONTENT_TYPE, "text/plain")
+                            .body(Body::from(s.clone()))?;
+                        return Ok(response);
                     }
-                    _ => {
-                        false
+                    ProcessingQueryError::UnsupportedQuery(s) => {
+                        let response = Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .header(header::CONTENT_TYPE, "text/plain")
+                            .body(Body::from(s.clone()))?;
+                        return Ok(response);
                     }
-                };
-
-                let projections = match query {
-                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
-                        match q.body {
-                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                                bodyselect.projection.clone()
-                            }
-                            _ => {
-                                Vec::new() //return empty
-                            }
-                        }
+                    ProcessingQueryError::NoTableFound(s) => {
+                        let response = Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .header(header::CONTENT_TYPE, "text/plain")
+                            .body(Body::from(s.clone()))?;
+                        return Ok(response);
                     }
-                    _ => {
-                        Vec::new() //return empty
+                    ProcessingQueryError::Unauthorized(s) => {
+                        let response = Response::builder()
+                            .status(StatusCode::UNAUTHORIZED)
+                            .header(header::CONTENT_TYPE, "text/plain")
+                            .body(Body::from(s.clone()))?;
+                        return Ok(response);
                     }
-                };
+                },
+            };
 
-                let mut positional_fields: Vec<PositionalColumn> = Vec::new();
-                let mut smart_fields: Vec<SmartColumn> = Vec::new();
-                let mut smart_fields_set: HashSet<String> = HashSet::new();
-                let mut projections_ordered: Vec<String> = Vec::new();
-                // TODO: We should stream the data out as it becomes available to save memory
-                for proj in &projections {
-                    match proj {
-                        sqlparser::sqlast::SQLSelectItem::UnnamedExpression(ref ast) => {
-                            // we have an identifier
-                            match ast {
-                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
-                                    let id_name = &identifier[1..];
-                                    let position = match id_name.parse::<i32>() {
-                                        Ok(p) => p,
-                                        Err(_) => -1
-                                    };
-                                    // if we were able to parse identifier as an i32 it's a positional
-                                    if position > 0 {
-                                        positional_fields.push(PositionalColumn { position: position, alias: identifier.clone() });
-                                        projections_ordered.push(identifier.clone());
-                                    } else {
-                                        // try to parse as as smart field
-                                        for sfield in SMART_FIELDS_RE.captures_iter(identifier) {
-                                            let typed = sfield[2].to_string();
-                                            let mut pos = 1;
-                                            if sfield.get(4).is_none() == false {
-                                                pos = match sfield[4].parse::<i32>() {
-                                                    Ok(p) => p,
-                                                    // technically this should never happen as the regex already validated an integer
-                                                    Err(_) => -1,
-                                                };
-                                            }
-                                            // we use this set to keep track of active smart fields
-                                            smart_fields_set.insert(typed.clone());
-                                            // track the smartfield
-                                            smart_fields.push(SmartColumn { typed: typed.clone(), position: pos, alias: identifier.clone() });
-                                            // record the order or extraction
-                                            projections_ordered.push(identifier.clone());
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                        _ => {} // for now let's not do anything on other Variances
-                    }
-                }
-
-                // see which fields in the conditions were not requested in the projections and extract them too
-                match query {
-                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
-                        match q.body {
-                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                                for slct in &bodyselect.selection {
-                                    match slct {
-                                        sqlparser::sqlast::ASTNode::SQLIsNotNull(ast) => {
-                                            let identifier = match **ast {
-                                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
-                                                    identifier.to_string()
-                                                }
-                                                _ => {
-                                                    // TODO: Should we be retunring anything at all?
-                                                    "".to_string()
-                                                }
-                                            };
-                                            //positional or smart?
-                                            let id_name = &identifier[1..];
-                                            let position = match id_name.parse::<i32>() {
-                                                Ok(p) => p,
-                                                Err(_) => -1
-                                            };
-                                            // if we were able to parse identifier as an i32 it's a positional
-                                            if position > 0 {
-                                                positional_fields.push(PositionalColumn { position: position, alias: identifier.clone() });
-                                            } else {
-                                                // try to parse as as smart field
-                                                for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
-                                                    let typed = sfield[2].to_string();
-                                                    let mut pos = 1;
-                                                    if sfield.get(4).is_none() == false {
-                                                        pos = match sfield[4].parse::<i32>() {
-                                                            Ok(p) => p,
-                                                            // technically this should never happen as the regex already validated an integer
-                                                            Err(_) => -1,
-                                                        };
-                                                    }
-                                                    // we use this set to keep track of active smart fields
-                                                    smart_fields_set.insert(typed.clone());
-                                                    // track the smartfield
-                                                    smart_fields.push(SmartColumn { typed: typed.clone(), position: pos, alias: identifier.clone() });
-                                                }
-                                            }
-                                        }
-                                        sqlparser::sqlast::ASTNode::SQLIsNull(ast) => {
-                                            let identifier = match **ast {
-                                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
-                                                    identifier.to_string()
-                                                }
-                                                _ => {
-                                                    // TODO: Should we be retunring anything at all?
-                                                    "".to_string()
-                                                }
-                                            };
-                                            //positional or smart?
-                                            let id_name = &identifier[1..];
-                                            let position = match id_name.parse::<i32>() {
-                                                Ok(p) => p,
-                                                Err(_) => -1
-                                            };
-                                            // if we were able to parse identifier as an i32 it's a positional
-                                            if position > 0 {
-                                                positional_fields.push(PositionalColumn { position: position, alias: identifier.clone() });
-                                            } else {
-                                                // try to parse as as smart field
-                                                for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
-                                                    let typed = sfield[2].to_string();
-                                                    let mut pos = 1;
-                                                    if sfield.get(4).is_none() == false {
-                                                        pos = match sfield[4].parse::<i32>() {
-                                                            Ok(p) => p,
-                                                            // technically this should never happen as the regex already validated an integer
-                                                            Err(_) => -1,
-                                                        };
-                                                    }
-                                                    // we use this set to keep track of active smart fields
-                                                    smart_fields_set.insert(typed.clone());
-                                                    // track the smartfield
-                                                    smart_fields.push(SmartColumn { typed: typed.clone(), position: pos, alias: identifier.clone() });
-                                                }
-                                            }
-                                        }
-                                        sqlparser::sqlast::ASTNode::SQLBinaryExpr { left, op: _, right: _ } => {
-                                            let identifier = left.to_string();
-
-                                            //positional or smart?
-                                            let id_name = &identifier[1..];
-                                            let position = match id_name.parse::<i32>() {
-                                                Ok(p) => p,
-                                                Err(_) => -1
-                                            };
-                                            // if we were able to parse identifier as an i32 it's a positional
-                                            if position > 0 {
-                                                positional_fields.push(PositionalColumn { position: position, alias: identifier.clone() });
-                                            } else {
-                                                // try to parse as as smart field
-                                                for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
-                                                    let typed = sfield[2].to_string();
-                                                    let mut pos = 1;
-                                                    if sfield.get(4).is_none() == false {
-                                                        pos = match sfield[4].parse::<i32>() {
-                                                            Ok(p) => p,
-                                                            // technically this should never happen as the regex already validated an integer
-                                                            Err(_) => -1,
-                                                        };
-                                                    }
-                                                    // we use this set to keep track of active smart fields
-                                                    smart_fields_set.insert(typed.clone());
-                                                    // track the smartfield
-                                                    smart_fields.push(SmartColumn { typed: typed.clone(), position: pos, alias: identifier.clone() });
-                                                }
-                                            }
-                                        }
-                                        _ => {
-                                            info!("Unhandled operation");
-                                        }
-                                    }
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    _ => {}
-                };
-
-                // Build the parsing flags used by scanlog
-                let mut scan_flags: ScanFlags = ScanFlags::NONE;
-                for sfield_type in smart_fields_set {
-                    let flag = match sfield_type.as_ref() {
-                        "$ip" => ScanFlags::IP,
-                        "$email" => ScanFlags::EMAIL,
-                        "$date" => ScanFlags::DATE,
-                        "$quoted" => ScanFlags::QUOTED,
-                        "$url" => ScanFlags::URL,
-                        _ => ScanFlags::NONE,
-                    };
-                    if scan_flags == ScanFlags::NONE {
-                        scan_flags = flag;
-                    } else {
-                        scan_flags = scan_flags | flag;
-                    }
-                }
-
-                // we keep track of the parsing of the queries in order
-                let query_string = query.to_string();
-                queries_parse.insert(query_string, QueryParsing {
-                    read_all,
-                    scan_flags,
-                    positional_fields,
-                    smart_fields,
-                    projections_ordered,
-                });
-            }
             // if we reach this point, no query was invalid
-
             let (tx, rx) = mpsc::unbounded_channel();
             let (body_tx, body) = hyper::Body::channel();
 
@@ -546,32 +296,19 @@ pub fn api_log_search(
             hyper::rt::spawn({
                 // for each query, retrive data
                 stream::iter_ok(ast).fold(tx, move |tx, query| {
-                    // find the table they want to query
-                    let some_table = match query {
-                        sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
-                            match q.body {
-                                sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                                    bodyselect.relation.clone()
-                                }
-                                _ => {
-                                    // this shouldn't happen
-                                    None
-                                }
-                            }
-                        }
-                        _ => {
-                            None
-                        }
-                    };
+                    let query_data = queries_parse.get(&query.to_string()[..]).unwrap();
 
-                    let table = some_table.unwrap().to_string();
+                    // We'll pass this mutex to signal how many lines have been read if there's any limitation
+                    let max_lines_to_read: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(query_data.limit));
+
                     // should be safe to unwrap since query validation made sure the log exists
-                    let log = cfg.get_log(&table).unwrap();
+                    let log = cfg.get_log(&query_data.log_name).unwrap();
 
                     let log = log.clone();
-                    let my_ds:Vec<DataStore> = cfg.datastore.iter().map(|(_,y)| y.clone()).collect();
+                    let my_ds: Vec<DataStore> = cfg.datastore.iter().map(|(_, y)| y.clone()).collect();
                     let queries_parse = queries_parse.clone();
                     let query = query.clone();
+                    let max_lines = Arc::clone(&max_lines_to_read);
                     stream::iter_ok(my_ds).fold(tx, move |tx, ds| {
                         let log_name = log.name.clone().unwrap();
                         let msl_files = match list_msl_bucket_files(&log_name[..], &ds) {
@@ -587,22 +324,47 @@ pub fn api_log_search(
                         let ds = ds.clone();
                         let queries_parse = queries_parse.clone();
                         let query = query.clone();
+                        let max_lines = Arc::clone(&max_lines);
                         stream::iter_ok(msl_files).fold(tx, move |tx, f| {
-                            // TODO: Ideally we want to work with the streaming body
-                            let all_file_lines = match read_file(&f, &ds) {
-                                Ok(l) => l,
-                                Err(e) => {
-                                    error!("problem reading file {}", e);
-                                    // TODO: Handle error. Ideally, we want to stop the channel
-                                    "".to_string()
+
+                            // Don't read the file if we have maxed out the lines to return
+                            let mut max_tak: Option<u64>;
+                            let protected_data = max_lines.lock().unwrap();
+                            max_tak = protected_data.clone();
+                            drop(protected_data);
+                            //  Based on the content of max_tak we will determine wether or not to 
+                            // read the file. Ee do this so if we are already reached the LIMIT provided
+                            // we simply stop reading files.
+                            let mut should_read_file = false;
+                            if max_tak.is_some() {
+                                if max_tak.unwrap() > 0 {
+                                    // TODO: Ideally we want to work with the streaming body
+                                    should_read_file = true;
                                 }
-                            };
+                            } else {
+                                // else take as many as we can (18,446,744,073,709,551,615 lines)
+                                max_tak = Some(std::u64::MAX);
+                                // TODO: Ideally we want to work with the streaming body
+                                should_read_file = true;
+                            }
+                            let mut all_file_lines = String::new();
+                            if should_read_file {
+                                all_file_lines = match read_file(&f, &ds) {
+                                    Ok(l) => l,
+                                    Err(e) => {
+                                        error!("problem reading file {}", e);
+                                        // TODO: Handle error. Ideally, we want to stop the channel
+                                        "".to_string()
+                                    }
+                                };
+                            }
 
 
                             let individual_lines: Vec<String> = all_file_lines.lines().map(|x| x.to_string()).collect();
                             let queries_parse = queries_parse.clone();
                             let query = query.clone();
-                            stream::iter_ok(individual_lines).fold(tx, move |tx, line| {
+                            let max_lines = Arc::clone(&max_lines);
+                            stream::iter_ok(individual_lines).take(max_tak.unwrap()).fold(tx, move |tx, line| {
                                 let mut projection_values: HashMap<String, String> = HashMap::new();
                                 let query_data = queries_parse.get(&query.to_string()[..]).unwrap();
                                 // if we have position columns, process
@@ -635,7 +397,7 @@ pub fn api_log_search(
                                 // filter the line
                                 let mut skip_line = false;
                                 match query {
-                                    sqlparser::sqlast::SQLStatement::SQLSelect(ref q) => {
+                                    sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => {
                                         match q.body {
                                             sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
                                                 let mut all_conditions_pass = true;
@@ -669,11 +431,11 @@ pub fn api_log_search(
                                                                 all_conditions_pass = false;
                                                             }
                                                         }
-                                                        sqlparser::sqlast::ASTNode::SQLBinaryExpr { left, op, right } => {
+                                                        sqlparser::sqlast::ASTNode::SQLBinaryOp { left, op, right } => {
                                                             let identifier = left.to_string();
 
                                                             match op {
-                                                                sqlparser::sqlast::SQLOperator::Eq => {
+                                                                sqlparser::sqlast::SQLBinaryOperator::Eq => {
                                                                     // TODO: Optimize this op_value preparation, don't do it in the loop
                                                                     let op_value = match **right {
                                                                         sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
@@ -699,7 +461,7 @@ pub fn api_log_search(
                                                                         all_conditions_pass = false;
                                                                     }
                                                                 }
-                                                                sqlparser::sqlast::SQLOperator::NotEq => {
+                                                                sqlparser::sqlast::SQLBinaryOperator::NotEq => {
                                                                     // TODO: Optimize this op_value preparation, don't do it in the loop
                                                                     let op_value = match **right {
                                                                         sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
@@ -724,7 +486,7 @@ pub fn api_log_search(
                                                                         all_conditions_pass = false;
                                                                     }
                                                                 }
-                                                                sqlparser::sqlast::SQLOperator::Like => {
+                                                                sqlparser::sqlast::SQLBinaryOperator::Like => {
                                                                     // TODO: Optimize this op_value preparation, don't do it in the loop
                                                                     let op_value = match **right {
                                                                         sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
@@ -797,6 +559,13 @@ pub fn api_log_search(
                                         outline.push('\n');
                                     }
                                 }
+                                // increase line counter
+                                let mut protected_data = max_lines.lock().unwrap();
+                                let data = *protected_data;
+                                if data.is_some() {
+                                    *protected_data = Some(data.unwrap() - 1);
+                                }
+                                drop(protected_data);
                                 tx.send(outline).map_err(|e| println!("{:?}", e))
                             })
                         })
@@ -823,4 +592,723 @@ pub fn api_log_search(
             Ok(Response::new(body))
         })
     )
+}
+
+enum ProcessingQueryError {
+    Fail(String),
+    UnsupportedQuery(String),
+    NoTableFound(String),
+    Unauthorized(String),
+}
+
+enum ProcessedQuery {
+    TranslatedQuery(HashMap<String, QueryParsing>),
+    Error(ProcessingQueryError),
+}
+
+/// Walks over a provided AST and build a `ProcessedQuery` with a `HashMap<String, QueryParsing>` if
+/// successful that layouts the information needed for MinSQL to start filtering and projecting the
+/// resulting data coming from S3.
+fn process_sql(
+    cfg: &'static Config,
+    access_token: &String,
+    ast: &Vec<SQLStatement>,
+) -> ProcessedQuery {
+    lazy_static! {
+        static ref SMART_FIELDS_RE: Regex =
+            Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
+    };
+
+    let mut queries_parse: HashMap<String, QueryParsing> = HashMap::new();
+
+    // We are going to validate the whole payload.
+    // Make sure tables are valid, projections are valid and filtering operations are supported
+    for query in ast {
+        // find the table they want to query
+        let some_table = match query {
+            sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => {
+                match q.body {
+                    sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                        // TODO: Validate a single table
+                        Some(bodyselect.from[0].relation.clone())
+                    }
+                    _ => {
+                        return ProcessedQuery::Error(ProcessingQueryError::Fail(
+                            "No Table Found".to_string(),
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return ProcessedQuery::Error(ProcessingQueryError::UnsupportedQuery(
+                    "Unsupported query".to_string(),
+                ));
+            }
+        };
+        if some_table == None {
+            return ProcessedQuery::Error(ProcessingQueryError::NoTableFound(
+                "No table was found in the query statement".to_string(),
+            ));
+        }
+        let log_name = some_table.unwrap().to_string().clone();
+
+        // check if we have access for the requested table
+        if !token_has_access_to_log(&cfg, &access_token[..], &log_name[..]) {
+            return ProcessedQuery::Error(ProcessingQueryError::Unauthorized(
+                "Unauthorized".to_string(),
+            ));
+        }
+
+        // determine our read strategy
+        let read_all = match query {
+            sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => match q.body {
+                sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                    let mut is_wildcard = false;
+                    for projection in &bodyselect.projection {
+                        if *projection == sqlparser::sqlast::SQLSelectItem::Wildcard {
+                            is_wildcard = true
+                        }
+                    }
+                    is_wildcard
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+
+        let projections = match query {
+            sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => {
+                match q.body {
+                    sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                        bodyselect.projection.clone()
+                    }
+                    _ => {
+                        Vec::new() //return empty
+                    }
+                }
+            }
+            _ => {
+                Vec::new() //return empty
+            }
+        };
+
+        let mut positional_fields: Vec<PositionalColumn> = Vec::new();
+        let mut smart_fields: Vec<SmartColumn> = Vec::new();
+        let mut smart_fields_set: HashSet<String> = HashSet::new();
+        let mut projections_ordered: Vec<String> = Vec::new();
+        // TODO: We should stream the data out as it becomes available to save memory
+        for proj in &projections {
+            match proj {
+                sqlparser::sqlast::SQLSelectItem::UnnamedExpression(ref ast) => {
+                    // we have an identifier
+                    match ast {
+                        sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
+                            let id_name = &identifier[1..];
+                            let position = match id_name.parse::<i32>() {
+                                Ok(p) => p,
+                                Err(_) => -1,
+                            };
+                            // if we were able to parse identifier as an i32 it's a positional
+                            if position > 0 {
+                                positional_fields.push(PositionalColumn {
+                                    position: position,
+                                    alias: identifier.clone(),
+                                });
+                                projections_ordered.push(identifier.clone());
+                            } else {
+                                // try to parse as as smart field
+                                for sfield in SMART_FIELDS_RE.captures_iter(identifier) {
+                                    let typed = sfield[2].to_string();
+                                    let mut pos = 1;
+                                    if sfield.get(4).is_none() == false {
+                                        pos = match sfield[4].parse::<i32>() {
+                                            Ok(p) => p,
+                                            // technically this should never happen as the regex already validated an integer
+                                            Err(_) => -1,
+                                        };
+                                    }
+                                    // we use this set to keep track of active smart fields
+                                    smart_fields_set.insert(typed.clone());
+                                    // track the smartfield
+                                    smart_fields.push(SmartColumn {
+                                        typed: typed.clone(),
+                                        position: pos,
+                                        alias: identifier.clone(),
+                                    });
+                                    // record the order or extraction
+                                    projections_ordered.push(identifier.clone());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {} // for now let's not do anything on other Variances
+            }
+        }
+
+        // see which fields in the conditions were not requested in the projections and extract them too
+        let limit = match query {
+            sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => {
+                match q.body {
+                    sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                        for slct in &bodyselect.selection {
+                            match slct {
+                                sqlparser::sqlast::ASTNode::SQLIsNotNull(ast) => {
+                                    let identifier = match **ast {
+                                        sqlparser::sqlast::ASTNode::SQLIdentifier(
+                                            ref identifier,
+                                        ) => identifier.to_string(),
+                                        _ => {
+                                            // TODO: Should we be retunring anything at all?
+                                            "".to_string()
+                                        }
+                                    };
+                                    //positional or smart?
+                                    let id_name = &identifier[1..];
+                                    let position = match id_name.parse::<i32>() {
+                                        Ok(p) => p,
+                                        Err(_) => -1,
+                                    };
+                                    // if we were able to parse identifier as an i32 it's a positional
+                                    if position > 0 {
+                                        positional_fields.push(PositionalColumn {
+                                            position: position,
+                                            alias: identifier.clone(),
+                                        });
+                                    } else {
+                                        // try to parse as as smart field
+                                        for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..])
+                                        {
+                                            let typed = sfield[2].to_string();
+                                            let mut pos = 1;
+                                            if sfield.get(4).is_none() == false {
+                                                pos = match sfield[4].parse::<i32>() {
+                                                    Ok(p) => p,
+                                                    // technically this should never happen as the regex already validated an integer
+                                                    Err(_) => -1,
+                                                };
+                                            }
+                                            // we use this set to keep track of active smart fields
+                                            smart_fields_set.insert(typed.clone());
+                                            // track the smartfield
+                                            smart_fields.push(SmartColumn {
+                                                typed: typed.clone(),
+                                                position: pos,
+                                                alias: identifier.clone(),
+                                            });
+                                        }
+                                    }
+                                }
+                                sqlparser::sqlast::ASTNode::SQLIsNull(ast) => {
+                                    let identifier = match **ast {
+                                        sqlparser::sqlast::ASTNode::SQLIdentifier(
+                                            ref identifier,
+                                        ) => identifier.to_string(),
+                                        _ => {
+                                            // TODO: Should we be retunring anything at all?
+                                            "".to_string()
+                                        }
+                                    };
+                                    //positional or smart?
+                                    let id_name = &identifier[1..];
+                                    let position = match id_name.parse::<i32>() {
+                                        Ok(p) => p,
+                                        Err(_) => -1,
+                                    };
+                                    // if we were able to parse identifier as an i32 it's a positional
+                                    if position > 0 {
+                                        positional_fields.push(PositionalColumn {
+                                            position: position,
+                                            alias: identifier.clone(),
+                                        });
+                                    } else {
+                                        // try to parse as as smart field
+                                        for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..])
+                                        {
+                                            let typed = sfield[2].to_string();
+                                            let mut pos = 1;
+                                            if sfield.get(4).is_none() == false {
+                                                pos = match sfield[4].parse::<i32>() {
+                                                    Ok(p) => p,
+                                                    // technically this should never happen as the regex already validated an integer
+                                                    Err(_) => -1,
+                                                };
+                                            }
+                                            // we use this set to keep track of active smart fields
+                                            smart_fields_set.insert(typed.clone());
+                                            // track the smartfield
+                                            smart_fields.push(SmartColumn {
+                                                typed: typed.clone(),
+                                                position: pos,
+                                                alias: identifier.clone(),
+                                            });
+                                        }
+                                    }
+                                }
+                                sqlparser::sqlast::ASTNode::SQLBinaryOp {
+                                    left,
+                                    op: _,
+                                    right: _,
+                                } => {
+                                    let identifier = left.to_string();
+
+                                    //positional or smart?
+                                    let id_name = &identifier[1..];
+                                    let position = match id_name.parse::<i32>() {
+                                        Ok(p) => p,
+                                        Err(_) => -1,
+                                    };
+                                    // if we were able to parse identifier as an i32 it's a positional
+                                    if position > 0 {
+                                        positional_fields.push(PositionalColumn {
+                                            position: position,
+                                            alias: identifier.clone(),
+                                        });
+                                    } else {
+                                        // try to parse as as smart field
+                                        for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..])
+                                        {
+                                            let typed = sfield[2].to_string();
+                                            let mut pos = 1;
+                                            if sfield.get(4).is_none() == false {
+                                                pos = match sfield[4].parse::<i32>() {
+                                                    Ok(p) => p,
+                                                    // technically this should never happen as the regex already validated an integer
+                                                    Err(_) => -1,
+                                                };
+                                            }
+                                            // we use this set to keep track of active smart fields
+                                            smart_fields_set.insert(typed.clone());
+                                            // track the smartfield
+                                            smart_fields.push(SmartColumn {
+                                                typed: typed.clone(),
+                                                position: pos,
+                                                alias: identifier.clone(),
+                                            });
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    info!("Unhandled operation");
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                match &q.limit {
+                    Some(limit_node) => match limit_node {
+                        sqlparser::sqlast::ASTNode::SQLValue(val) => match val {
+                            sqlparser::sqlast::Value::Long(l) => Some(l.clone()),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+
+        // Build the parsing flags used by scanlog
+        let mut scan_flags: ScanFlags = ScanFlags::NONE;
+        for sfield_type in smart_fields_set {
+            let flag = match sfield_type.as_ref() {
+                "$ip" => ScanFlags::IP,
+                "$email" => ScanFlags::EMAIL,
+                "$date" => ScanFlags::DATE,
+                "$quoted" => ScanFlags::QUOTED,
+                "$url" => ScanFlags::URL,
+                _ => ScanFlags::NONE,
+            };
+            if scan_flags == ScanFlags::NONE {
+                scan_flags = flag;
+            } else {
+                scan_flags = scan_flags | flag;
+            }
+        }
+
+        // we keep track of the parsing of the queries via their signature.
+        let query_string = query.to_string();
+        queries_parse.insert(
+            query_string,
+            QueryParsing {
+                log_name,
+                read_all,
+                scan_flags,
+                positional_fields,
+                smart_fields,
+                projections_ordered,
+                limit,
+            },
+        );
+    }
+    ProcessedQuery::TranslatedQuery(queries_parse)
+}
+
+#[cfg(test)]
+mod query_tests {
+    use crate::config::{Log, LogAuth};
+
+    use super::*;
+
+    // Generates a Config object with only one auth item for one log
+    fn get_ds_log_auth_config_for(log_name: String, token: &String) -> Config {
+        let mut log_map = HashMap::new();
+        log_map.insert(
+            log_name.clone(),
+            Log {
+                name: Some(log_name.clone()),
+                datastores: Vec::new(),
+                commit_window: "5s".to_string(),
+            },
+        );
+
+        let mut log_auth_map: HashMap<String, LogAuth> = HashMap::new();
+        log_auth_map.insert(
+            log_name,
+            LogAuth {
+                token: token.clone(),
+                api: Vec::new(),
+                expire: "".to_string(),
+                status: "".to_string(),
+            },
+        );
+
+        let mut auth = HashMap::new();
+        auth.insert(token.clone(), log_auth_map);
+
+        let cfg = Config {
+            version: "1".to_string(),
+            server: None,
+            datastore: HashMap::new(),
+            log: log_map,
+            auth: auth,
+        };
+        cfg
+    }
+
+    #[test]
+    fn process_simple_select() {
+        let access_token = "TOKEN1".to_string();
+
+        let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let query = "SELECT * FROM mylog".to_string();
+        let ast = parse_query(Chunk::from(query.clone())).unwrap();
+        let queries_parse = process_sql(&cfg, &access_token, &ast);
+
+        match queries_parse {
+            ProcessedQuery::TranslatedQuery(pq) => match pq.get(&query[..]) {
+                Some(mqp) => {
+                    assert_eq!(mqp.log_name, "mylog");
+                    assert_eq!(mqp.read_all, true);
+                }
+                None => panic!("woops, no query returned for this?"),
+            },
+            _ => panic!("error"),
+        }
+    }
+
+    #[test]
+    fn process_simple_select_limit() {
+        let access_token = "TOKEN1".to_string();
+
+        let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let query = "SELECT * FROM mylog LIMIT 10".to_string();
+        let ast = parse_query(Chunk::from(query.clone())).unwrap();
+        let queries_parse = process_sql(&cfg, &access_token, &ast);
+
+        match queries_parse {
+            ProcessedQuery::TranslatedQuery(pq) => match pq.get(&query[..]) {
+                Some(mqp) => {
+                    assert_eq!(mqp.log_name, "mylog");
+                    assert_eq!(mqp.read_all, true);
+                    match mqp.limit {
+                        Some(l) => assert_eq!(l, 10),
+                        None => panic!("NO LIMIT FOUND"),
+                    }
+                }
+                None => panic!("woops, no query returned for this?"),
+            },
+            _ => panic!("error"),
+        }
+    }
+
+    #[test]
+    fn process_positional_fields_select() {
+        let access_token = "TOKEN1".to_string();
+
+        let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let query = "SELECT $1, $4 FROM mylog".to_string();
+        let ast = parse_query(Chunk::from(query.clone())).unwrap();
+        let queries_parse = process_sql(&cfg, &access_token, &ast);
+
+        match queries_parse {
+            ProcessedQuery::TranslatedQuery(pq) => match pq.get(&query[..]) {
+                Some(mqp) => {
+                    assert_eq!(mqp.log_name, "mylog");
+                    assert_eq!(
+                        mqp.positional_fields,
+                        vec![
+                            PositionalColumn {
+                                position: 1,
+                                alias: "$1".to_string(),
+                            },
+                            PositionalColumn {
+                                position: 4,
+                                alias: "$4".to_string(),
+                            }
+                        ]
+                    )
+                }
+                None => panic!("woops, no query returned for this?"),
+            },
+            _ => panic!("error"),
+        }
+    }
+
+    #[test]
+    fn process_positional_fields_select_limit() {
+        let access_token = "TOKEN1".to_string();
+
+        let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let query = "SELECT $1, $4 FROM mylog LIMIT 10".to_string();
+        let ast = parse_query(Chunk::from(query.clone())).unwrap();
+        let queries_parse = process_sql(&cfg, &access_token, &ast);
+
+        match queries_parse {
+            ProcessedQuery::TranslatedQuery(pq) => match pq.get(&query[..]) {
+                Some(mqp) => {
+                    assert_eq!(mqp.log_name, "mylog");
+                    assert_eq!(
+                        mqp.positional_fields,
+                        vec![
+                            PositionalColumn {
+                                position: 1,
+                                alias: "$1".to_string(),
+                            },
+                            PositionalColumn {
+                                position: 4,
+                                alias: "$4".to_string(),
+                            }
+                        ]
+                    );
+                    assert_eq!(
+                        mqp.projections_ordered,
+                        vec!["$1".to_string(), "$4".to_string()],
+                        "Order of fields is incorrect"
+                    );
+                    match mqp.limit {
+                        Some(l) => assert_eq!(l, 10),
+                        None => panic!("NO LIMIT FOUND"),
+                    }
+                }
+                None => panic!("woops, no query returned for this?"),
+            },
+            _ => panic!("error"),
+        }
+    }
+
+    #[test]
+    fn process_smart_fields_select_limit() {
+        let access_token = "TOKEN1".to_string();
+
+        let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let query = "SELECT $ip, $email FROM mylog LIMIT 10".to_string();
+        let ast = parse_query(Chunk::from(query.clone())).unwrap();
+        let queries_parse = process_sql(&cfg, &access_token, &ast);
+
+        match queries_parse {
+            ProcessedQuery::TranslatedQuery(pq) => match pq.get(&query[..]) {
+                Some(mqp) => {
+                    assert_eq!(mqp.log_name, "mylog");
+                    assert_eq!(
+                        mqp.smart_fields,
+                        vec![
+                            SmartColumn {
+                                typed: "$ip".to_string(),
+                                position: 1,
+                                alias: "$ip".to_string(),
+                            },
+                            SmartColumn {
+                                typed: "$email".to_string(),
+                                position: 1,
+                                alias: "$email".to_string(),
+                            }
+                        ]
+                    );
+                    assert_eq!(
+                        mqp.projections_ordered,
+                        vec!["$ip".to_string(), "$email".to_string()],
+                        "Order of fields is incorrect"
+                    );
+                    assert_eq!(
+                        mqp.scan_flags,
+                        ScanFlags::IP | ScanFlags::EMAIL,
+                        "Scan flags don't match"
+                    );
+                    match mqp.limit {
+                        Some(l) => assert_eq!(l, 10),
+                        None => panic!("NO LIMIT FOUND"),
+                    }
+                }
+                None => panic!("woops, no query returned for this?"),
+            },
+            _ => panic!("error"),
+        }
+    }
+
+    #[test]
+    fn process_mixed_smart_positional_fields_select_limit() {
+        let access_token = "TOKEN1".to_string();
+
+        let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let query = "SELECT $2, $ip, $email FROM mylog LIMIT 10".to_string();
+        let ast = parse_query(Chunk::from(query.clone())).unwrap();
+        let queries_parse = process_sql(&cfg, &access_token, &ast);
+
+        match queries_parse {
+            ProcessedQuery::TranslatedQuery(pq) => match pq.get(&query[..]) {
+                Some(mqp) => {
+                    assert_eq!(mqp.log_name, "mylog");
+                    assert_eq!(
+                        mqp.smart_fields,
+                        vec![
+                            SmartColumn {
+                                typed: "$ip".to_string(),
+                                position: 1,
+                                alias: "$ip".to_string(),
+                            },
+                            SmartColumn {
+                                typed: "$email".to_string(),
+                                position: 1,
+                                alias: "$email".to_string(),
+                            }
+                        ]
+                    );
+                    assert_eq!(
+                        mqp.positional_fields,
+                        vec![PositionalColumn {
+                            position: 2,
+                            alias: "$2".to_string(),
+                        }]
+                    );
+                    assert_eq!(
+                        mqp.projections_ordered,
+                        vec!["$2".to_string(), "$ip".to_string(), "$email".to_string()],
+                        "Order of fields is incorrect"
+                    );
+                    match mqp.limit {
+                        Some(l) => assert_eq!(l, 10),
+                        None => panic!("NO LIMIT FOUND"),
+                    }
+                }
+                None => panic!("woops, no query returned for this?"),
+            },
+            _ => panic!("error parsing query"),
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn process_invalid_query() {
+        let query = "INSERT INTO mylog ($line) VALES ('line')".to_string();
+        match parse_query(Chunk::from(query.clone())) {
+            Ok(_) => (),
+            Err(_) => {
+                panic!("Expected invalid query");
+            }
+        }
+    }
+
+    #[test]
+    fn process_simple_select_invalid_access() {
+        let provided_access_token = "TOKEN2".to_string();
+        let access_token = "TOKEN1".to_string();
+
+        let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let query = "SELECT * FROM mylog".to_string();
+        let ast = parse_query(Chunk::from(query.clone())).unwrap();
+        let queries_parse = process_sql(&cfg, &provided_access_token, &ast);
+
+        match queries_parse {
+            ProcessedQuery::TranslatedQuery(pq) => match pq.get(&query[..]) {
+                Some(mqp) => {
+                    assert_eq!(mqp.log_name, "mylog");
+                    assert_eq!(mqp.read_all, true);
+                }
+                None => panic!("woops, no query returned for this?"),
+            },
+            ProcessedQuery::Error(e) => match e {
+                ProcessingQueryError::Unauthorized(_) => assert!(true),
+                _ => panic!("Incorrect error"),
+            },
+        }
+    }
+
+    #[test]
+    fn process_simple_select_invalid_table() {
+        let provided_access_token = "TOKEN2".to_string();
+        let access_token = "TOKEN1".to_string();
+
+        let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let query = "SELECT * FROM incorrect_log".to_string();
+        let ast = parse_query(Chunk::from(query.clone())).unwrap();
+        let queries_parse = process_sql(&cfg, &provided_access_token, &ast);
+
+        match queries_parse {
+            ProcessedQuery::TranslatedQuery(pq) => match pq.get(&query[..]) {
+                Some(mqp) => {
+                    assert_eq!(mqp.log_name, "mylog");
+                    assert_eq!(mqp.read_all, true);
+                }
+                None => panic!("woops, no query returned for this?"),
+            },
+            ProcessedQuery::Error(e) => match e {
+                ProcessingQueryError::Unauthorized(_) => assert!(true),
+                _ => panic!("Incorrect error"),
+            },
+        }
+    }
+
+    #[test]
+    fn validate_invalid_table() {
+        let access_token = "TOKEN1".to_string();
+
+        let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let query = "SELECT * FROM incorrect_log".to_string();
+        let ast = parse_query(Chunk::from(query.clone())).unwrap();
+        match validate_logs(&cfg, &ast) {
+            None => panic!("Should have reported an error"),
+            Some(_) => assert!(true),
+        }
+    }
 }
