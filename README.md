@@ -1,3 +1,5 @@
+> NOTE: This project is under development, please do not depend on it yet as things may break.
+
 # MinSQL
 
 MinSQL is a log search engine designed with simplicity in mind to the extend that no SDK is needed to interact with it, most programming languages and tools have some form of http request capability (ie: curl) and that's all you need to interact with MinSQL. 
