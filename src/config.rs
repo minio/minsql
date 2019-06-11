@@ -38,7 +38,7 @@ pub struct Server {
     pub ca_certs: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct DataStore {
     pub name: Option<String>,
     pub endpoint: String,

@@ -18,13 +18,12 @@ use std::io::Error as IoError;
 use std::time::Instant;
 
 use chrono::{Datelike, Timelike, Utc};
-use rand::distributions::{IndependentSample, Range};
-//use chrono::DateTime;
 use futures::future::result;
 use futures::future::FutureResult;
 use futures::stream::Stream;
 use futures::Future;
 use futures::Poll;
+use rand::distributions::{IndependentSample, Range};
 use rusoto_core::HttpClient;
 use rusoto_core::Region;
 use rusoto_core::RusotoError;
@@ -37,10 +36,6 @@ use rusoto_s3::{
 use uuid::Uuid;
 
 use crate::config::{Config, DataStore};
-use std::collections::HashMap;
-use std::hash::Hash;
-
-//use rusoto_core::RusotoError;
 
 #[derive(Debug)]
 enum StorageError {
@@ -176,20 +171,20 @@ impl fmt::Display for WriteDatastoreError {
 }
 
 pub fn write_to_datastore(
-    logname: &str,
+    log_name: &str,
     cfg: &Config,
     payload: &String,
 ) -> Result<bool, WriteDatastoreError> {
     let start = Instant::now();
     // Select a datastore at random to write to
-    let datastore = rand_datastore(&cfg.datastore).unwrap();
+    let datastore = rand_datastore(&cfg, &log_name).unwrap();
     // Get the Object Storage client
-    let s3_client = client_for_datastore(datastore);
+    let s3_client = client_for_datastore(&datastore);
     let now = Utc::now();
     let my_uuid = Uuid::new_v4();
     let target_file = format!(
-        "{log}/{year}/{month}/{day}/{hour}/{ts}.msl.uncompacted",
-        log = logname,
+        "{log}/{year}/{month}/{day}/{hour}/{ts}.log",
+        log = log_name,
         year = now.date().year(),
         month = now.date().month(),
         day = now.date().day(),
@@ -299,10 +294,96 @@ pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, ListMslF
 }
 
 /// Selects a datastore at random
-fn rand_datastore<K: Eq + Hash, V>(hash: &HashMap<K, V>) -> Option<&V> {
-    if hash.is_empty() {
+/// Will return `None` if the log_name doesn't match a valid `Log` name in the `Config`.
+fn rand_datastore<'a>(cfg: &'a Config, log_name: &str) -> Option<&'a DataStore> {
+    let log = match cfg.log.get(log_name) {
+        Some(v) => v,
+        None => return None,
+    };
+
+    if log.datastores.is_empty() {
         return None;
     }
-    let index = Range::new(0, hash.len()).ind_sample(&mut rand::thread_rng());
-    hash.values().skip(index).next()
+    let index = Range::new(0, log.datastores.len()).ind_sample(&mut rand::thread_rng());
+    let datastore_name = match log.datastores.iter().skip(index).next() {
+        Some(v) => v,
+        None => return None,
+    };
+    cfg.datastore.get(&datastore_name[..])
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use std::collections::HashMap;
+
+    use crate::config::Log;
+
+    use super::*;
+
+    // Generates a Config object with only one auth item for one log
+    fn get_ds_log_config_for(log_name: String, datastore_list: &Vec<String>) -> Config {
+        let mut datastore_map = HashMap::new();
+        for datastore_name in datastore_list {
+            datastore_map.insert(
+                datastore_name.clone(),
+                DataStore {
+                    name: Some(datastore_name.clone()),
+                    endpoint: "".to_string(),
+                    access_key: "".to_string(),
+                    secret_key: "".to_string(),
+                    bucket: "".to_string(),
+                    prefix: "".to_string(),
+                },
+            );
+        }
+
+        let mut log_map = HashMap::new();
+        log_map.insert(
+            log_name.clone(),
+            Log {
+                name: Some(log_name.clone()),
+                datastores: datastore_list.clone(),
+                commit_window: "5s".to_string(),
+            },
+        );
+
+        let cfg = Config {
+            version: "1".to_string(),
+            server: None,
+            datastore: datastore_map,
+            log: log_map,
+            auth: HashMap::new(),
+        };
+        cfg
+    }
+
+    #[test]
+    fn random_datastore_selected() {
+        let ds_list = vec!["ds1".to_string(), "ds2".to_string()];
+        let cfg = get_ds_log_config_for("mylog".to_string(), &ds_list);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let rand_ds = rand_datastore(&cfg, "mylog");
+        let ds_name = match rand_ds {
+            None => panic!("No datastore was matched"),
+            Some(ds) => ds.name.clone().unwrap(),
+        };
+        let ds_in_list = ds_list.contains(&ds_name);
+        assert_eq!(ds_in_list, true)
+    }
+
+    #[test]
+    fn fail_random_datastore_selected() {
+        let ds_list = vec!["ds1".to_string(), "ds2".to_string()];
+        let cfg = get_ds_log_config_for("mylog".to_string(), &ds_list);
+        let cfg = Box::new(cfg);
+        let cfg: &'static _ = Box::leak(cfg);
+
+        let rand_ds = rand_datastore(&cfg, "mylog2");
+        assert_eq!(
+            rand_ds, None,
+            "Select random datastore from incorrect log should have failed."
+        )
+    }
 }
