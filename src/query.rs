@@ -29,7 +29,7 @@ use sqlparser::sqlparser::Parser;
 use sqlparser::sqlparser::ParserError;
 use tokio::sync::mpsc;
 
-use crate::config::Config;
+use crate::config::{Config, DataStore};
 use crate::constants::SF_DATE;
 use crate::constants::SF_EMAIL;
 use crate::constants::SF_IP;
@@ -553,11 +553,12 @@ pub fn api_log_search(cfg: &'static Config, req: Request<Body>) -> ResponseFutur
                     let log = cfg.get_log(&table).unwrap();
 
                     let log = log.clone();
-                    let my_ds = cfg.datastore.clone();
+                    let my_ds:Vec<DataStore> = cfg.datastore.iter().map(|(x,y)| y.clone()).collect();
                     let queries_parse = queries_parse.clone();
                     let query = query.clone();
                     stream::iter_ok(my_ds).fold(tx, move |tx, ds| {
-                        let msl_files = match list_msl_bucket_files(&log.name[..], &ds) {
+                        let log_name = log.name.clone().unwrap();
+                        let msl_files = match list_msl_bucket_files(&log_name[..], &ds) {
                             Ok(mf) => mf,
                             Err(e) => {
                                 // TODO: Handler Error. Ideally, we should end the channel and terminate the stream
