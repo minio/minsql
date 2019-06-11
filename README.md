@@ -20,11 +20,12 @@ To run the project you may specify a `.toml` configuration file, if none is spec
 A sample configuration file can be found at `config.toml.template`
 
 # Storing logs
-For a log `mylog` defined on the `config.toml` we can store logs on *MinSQL* by performing a `PUT` to our `MinSQL` instance
+For a log `mylog` defined on the `config.toml` we can store logs on *MinSQL* by performing a `PUT` to your `MinSQL` instance
 
 ```bash
 curl -X PUT \
   http://127.0.0.1:9999/mylog/store \
+  -H 'MINSQL-TOKEN: TOKEN1' \
   -d '10.8.0.1 - - [16/May/2019:23:02:56 +0000] "GET / HTTP/1.1" 400 256 "-" "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:52.0) Gecko/20100101 Firefox/52.0"'
 ```
 
@@ -45,6 +46,7 @@ To select all the logs for a particular log you can perform a simple SELECT stat
  ```bash
 curl -X POST \
   http://127.0.0.1:9999/search \
+  -H 'MINSQL-TOKEN: TOKEN1' \
   -d 'SELECT * FROM mylog'
 ```
 
@@ -67,6 +69,7 @@ Would be sent via curl like:
  ```bash
 curl -X POST \
   http://127.0.0.1:9999/search \
+  -H 'MINSQL-TOKEN: TOKEN1' \
   -d 'SELECT * FROM mylog;SELECT * FROM otherlog'
 ```
 This will return result of the first query and then start streaming the result of the second query and so on.

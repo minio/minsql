@@ -44,6 +44,7 @@ use crate::config::Config;
 use crate::ingest::flush_buffer;
 use crate::ingest::IngestBuffer;
 
+mod auth;
 mod config;
 mod constants;
 mod dialect;
@@ -64,7 +65,6 @@ pub fn run() {
 
     // Validate all datastore for reachability
     for (ds_name, ds) in cfg.datastore.iter() {
-        println!("{}", serde_json::to_string(ds).unwrap());
         // if we find a bad datastore, for now let's panic
         if storage::can_reach_datastore(&ds) == false {
             error!("{} is not a reachable datastore", &ds_name);
