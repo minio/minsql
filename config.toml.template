@@ -2,6 +2,9 @@ version = "1"
 
 [server]
    address = "0.0.0.0:9999"
+   # SSL can be turned on by providing a cert
+   #pkcs12_cert = "certificate.pfx"
+   #pkcs12_password = "password"
 
 # List as many minIO instances to store and retrieve the logs
 [datastore]
