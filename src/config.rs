@@ -33,9 +33,8 @@ pub struct Config {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Server {
     pub address: Option<String>,
-    pub tls_cert: Option<String>,
-    pub tls_key: Option<String>,
-    pub ca_certs: Option<String>,
+    pub pkcs12_cert: Option<String>,
+    pub pkcs12_password: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
