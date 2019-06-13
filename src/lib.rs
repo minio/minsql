@@ -14,22 +14,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-#[macro_use]
-extern crate bitflags;
-extern crate futures;
-extern crate hyper;
-#[macro_use]
-extern crate lazy_static;
-#[macro_use]
-extern crate log;
-extern crate native_tls;
-extern crate pretty_env_logger;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
-extern crate tokio_tls;
-extern crate toml;
-
 use std::collections::HashMap;
 use std::fs::File;
 use std::io;
@@ -44,6 +28,7 @@ use futures::{future, Future, Stream};
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
 use hyper::Server;
+use log::{error, info};
 use native_tls::{Identity, TlsAcceptor};
 use tokio::net::TcpListener;
 use tokio::timer::Interval;

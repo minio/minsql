@@ -20,9 +20,12 @@ use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use bitflags::bitflags;
 use futures::Sink;
 use futures::{stream, Future, Stream};
 use hyper::{header, Body, Chunk, Request, Response, StatusCode};
+use lazy_static::lazy_static;
+use log::{error, info};
 use regex::Regex;
 use sqlparser::sqlast::SQLStatement;
 use sqlparser::sqlparser::Parser;
@@ -332,7 +335,7 @@ pub fn api_log_search(
                             let protected_data = max_lines.lock().unwrap();
                             max_tak = protected_data.clone();
                             drop(protected_data);
-                            //  Based on the content of max_tak we will determine wether or not to 
+                            //  Based on the content of max_tak we will determine wether or not to
                             // read the file. Ee do this so if we are already reached the LIMIT provided
                             // we simply stop reading files.
                             let mut should_read_file = false;

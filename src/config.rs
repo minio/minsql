@@ -14,10 +14,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use log::error;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::fs;
+
+use serde_derive::{Deserialize, Serialize};
 
 //TODO: Remove serialize derive before commit
 

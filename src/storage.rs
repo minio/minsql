@@ -23,6 +23,7 @@ use futures::future::FutureResult;
 use futures::stream::Stream;
 use futures::Future;
 use futures::Poll;
+use log::info;
 use rand::distributions::{IndependentSample, Range};
 use rusoto_core::HttpClient;
 use rusoto_core::Region;

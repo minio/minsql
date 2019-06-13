@@ -24,6 +24,7 @@ use hyper::Body;
 use hyper::Request;
 use hyper::Response;
 use hyper::StatusCode;
+use log::{error, info};
 
 use crate::config::Config;
 use crate::http::requested_log_from_request;
