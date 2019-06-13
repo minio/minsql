@@ -127,7 +127,7 @@ pub fn can_reach_datastore(datastore: &DataStore) -> bool {
     // Get the Object Storage client
     let s3_client = client_for_datastore(&datastore);
     // perform list call to verify we have access
-    let can_reach = match s3_client
+    match s3_client
         .list_objects(ListObjectsRequest {
             bucket: datastore.bucket.clone(),
             delimiter: None,
@@ -144,8 +144,7 @@ pub fn can_reach_datastore(datastore: &DataStore) -> bool {
             info!("Cannot access bucket: {}", e);
             false
         }
-    };
-    can_reach
+    }
 }
 
 fn str_to_streaming_body(s: String) -> rusoto_s3::StreamingBody {

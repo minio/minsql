@@ -16,6 +16,7 @@
 
 fn main() {
     pretty_env_logger::init();
+
     // Start minSQL
     minsql::run();
 }
