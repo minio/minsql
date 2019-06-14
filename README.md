@@ -60,22 +60,6 @@ This will return you all the raw log lines stored for that log.
 45.23.126.92 - - [24/Jul/2017:00:16:18 +0000] "GET /info.php HTTP/1.1" 200 24589 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36"
 ```
 
-You can select from multiple logs at the same time by separating the queries with semicolon (;), ie:
-
-```sql
-SELECT * FROM mylog;SELECT * FROM otherlog
-```
-
-Would be sent via curl like:
-
- ```bash
-curl -X POST \
-  http://127.0.0.1:9999/search \
-  -H 'MINSQL-TOKEN: TOKEN1' \
-  -d 'SELECT * FROM mylog;SELECT * FROM otherlog'
-```
-This will return result of the first query and then start streaming the result of the second query and so on.
-
 ## Select parts of the data
 We can get only parts of the data by using any of the supported MinSQL entities, which start with a `$` sign.
 ### Positional 

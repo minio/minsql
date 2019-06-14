@@ -31,6 +31,7 @@ use crate::http::requested_log_from_request;
 use crate::http::return_404;
 use crate::http::ResponseFuture;
 use crate::storage::write_to_datastore;
+use std::mem;
 
 #[derive(Debug)]
 pub struct IngestBuffer {
@@ -47,6 +48,7 @@ impl IngestBuffer {
     }
 }
 
+/// Flushes an `IngestBuffer` for a given `log_name`
 pub fn flush_buffer(
     log_name: &String,
     cfg: &Config,
@@ -54,12 +56,10 @@ pub fn flush_buffer(
 ) {
     let ingest_buffer = ingest_buffers.get(&log_name[..]).unwrap();
     let mut flushed_data: Vec<String> = Vec::new();
+    // lock the ingest_buffer and access it's protected data.s
     let mut protected_data = ingest_buffer.lock().unwrap();
     if protected_data.total_bytes > 0 {
-        for data_bit in std::mem::replace(&mut protected_data.data, vec![]) {
-            flushed_data.push(data_bit);
-        }
-        protected_data.data.clear();
+        mem::swap(&mut protected_data.data, &mut flushed_data);
         protected_data.total_bytes = 0;
     }
     drop(protected_data);
