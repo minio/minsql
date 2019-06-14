@@ -84,11 +84,8 @@ pub fn api_log_store(
     log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
 ) -> ResponseFuture {
     let requested_log = match requested_log_from_request(&req) {
-        Ok(ln) => ln,
-        Err(e) => {
-            error!("{}", e);
-            return Box::new(future::ok(return_404()));
-        }
+        Some(ln) => ln,
+        None => return Box::new(future::ok(return_404())),
     };
     // make a clone of the config for the closure
     let cfg = cfg.clone();
@@ -103,10 +100,10 @@ pub fn api_log_store(
                     Err(err) => panic!("Couldn't convert buffer to string: {}", err),
                 };
 
-                let log = cfg.get_log(&requested_log.name).unwrap();
+                let log = cfg.get_log(&requested_log).unwrap();
                 // if the commit window is 0s, commit immediately
                 if log.commit_window == "0" {
-                    match write_to_datastore(&requested_log.name, &cfg, &payload) {
+                    match write_to_datastore(&requested_log, &cfg, &payload) {
                         Ok(x) => x,
                         Err(e) => {
                             error!("{}", e);
