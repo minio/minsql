@@ -14,9 +14,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use log::{error, info};
+use log::info;
 use std::collections::HashMap;
-use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use futures::{future, Future};
@@ -33,31 +32,6 @@ pub type ResponseFuture = Box<Future<Item = Response<Body>, Error = GenericError
 static INDEX_BODY: &[u8] = b"MinSQL";
 static NOTFOUND_BODY: &[u8] = b"Not Found";
 static UNAUTHORIZED_BODY: &[u8] = b"Unauthorized";
-
-#[derive(Debug)]
-pub struct RequestedLog {
-    pub name: String,
-    pub method: String,
-}
-
-#[derive(Debug)]
-pub struct RequestedLogError {
-    details: String,
-}
-
-impl RequestedLogError {
-    pub fn new(msg: &str) -> RequestedLogError {
-        RequestedLogError {
-            details: msg.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for RequestedLogError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.details)
-    }
-}
 
 pub fn return_404() -> Response<Body> {
     let body = Body::from(NOTFOUND_BODY);
@@ -83,19 +57,21 @@ pub fn return_400(message: &str) -> Response<Body> {
         .unwrap()
 }
 
-pub fn requested_log_from_request(req: &Request<Body>) -> Result<RequestedLog, RequestedLogError> {
+pub fn requested_log_from_request(req: &Request<Body>) -> Option<String> {
     let request_path_no_slash = String::from(&req.uri().path()[1..]);
     let path_split = request_path_no_slash.split("/");
     let parts: Vec<&str> = path_split.collect();
     if parts.len() != 2 {
-        return Err(RequestedLogError::new("Invalid log structure"));
+        None
+    } else {
+        let logname = parts[0].to_string();
+        let method = parts[1].to_string();
+        if method != "store" {
+            None
+        } else {
+            Some(logname)
+        }
     }
-    let logname = parts[0].to_string();
-    let method = parts[1].to_string();
-    return Ok(RequestedLog {
-        name: logname,
-        method: method,
-    });
 }
 
 fn extract_auth_token(req: &Request<Body>, cfg: &'static Config) -> Result<String, ResponseFuture> {
@@ -124,14 +100,11 @@ pub fn request_router(
 
         (&Method::PUT, _pth) => {
             match requested_log_from_request(&req) {
-                Err(e) => {
-                    error!("Failed to load configuration: {}", e);
-                    Box::new(future::ok(return_404()))
-                }
-                Ok(req_log) => {
+                None => Box::new(future::ok(return_404())),
+                Some(name) => {
                     // Does log exist in config?
-                    if cfg.get_log(&req_log.name).is_none() {
-                        info!("Attemped access of unknow log {}", req_log.name);
+                    if cfg.get_log(&name).is_none() {
+                        info!("Attempted access of unknown log {}", name);
                         return Box::new(future::ok(return_404()));
                     }
 
@@ -141,13 +114,8 @@ pub fn request_router(
                     };
 
                     // Does the provided token have access to this log?
-                    if !token_has_access_to_log(&cfg, &access_token, &req_log.name) {
+                    if !token_has_access_to_log(&cfg, &access_token, &name) {
                         return Box::new(future::ok(return_401()));
-                    }
-
-                    if &req_log.method[..] != "store" {
-                        // Return 404 not found response.
-                        return Box::new(future::ok(return_404()));
                     }
 
                     api_log_store(cfg, req, log_ingest_buffers)
@@ -179,8 +147,8 @@ fn validate_token_from_header(cfg: &'static Config, req: &Request<Body>) -> Head
         Err(_) => return HeaderToken::InvalidToken,
     };
     match cfg.auth.get(access_key) {
-        Some(_) => return HeaderToken::Token(access_key.to_string()),
-        None => return HeaderToken::InvalidToken,
+        Some(_) => HeaderToken::Token(access_key.to_string()),
+        None => HeaderToken::InvalidToken,
     }
 }
 
@@ -206,14 +174,13 @@ mod http_tests {
         let mut auth = HashMap::new();
         auth.insert(token.clone(), log_auth_map);
 
-        let cfg = Config {
+        Config {
             version: "1".to_string(),
             server: None,
             datastore: HashMap::new(),
             log: HashMap::new(),
             auth: auth,
-        };
-        cfg
+        }
     }
 
     struct ValidTokenHeaderTest {
