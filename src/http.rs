@@ -19,17 +19,13 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use futures::Sink;
-use futures::{future, stream, Future, Stream};
-use hyper::{Body, Chunk, Method, Request, Response, StatusCode};
+use futures::{future, Future};
+use hyper::{Body, Method, Request, Response, StatusCode};
 
 use crate::auth::token_has_access_to_log;
 use crate::config::Config;
 use crate::ingest::{api_log_store, IngestBuffer};
 use crate::query::api_log_search;
-
-//use std::cell::RefCell;
-//type ChunkStream = Box<Stream<Item = Chunk, Error = hyper::Error>>;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type ResponseFuture = Box<Future<Item = Response<Body>, Error = GenericError> + Send>;
@@ -102,87 +98,64 @@ pub fn requested_log_from_request(req: &Request<Body>) -> Result<RequestedLog, R
     });
 }
 
+fn extract_auth_token(req: &Request<Body>, cfg: &'static Config) -> Result<String, ResponseFuture> {
+    match validate_token_from_header(&cfg, &req) {
+        HeaderToken::NoToken => Err(Box::new(future::ok(return_401()))),
+        HeaderToken::InvalidToken => Err(Box::new(future::ok(return_400("Invalid token")))),
+        HeaderToken::Token(tok) => Ok(tok),
+    }
+}
+
 pub fn request_router(
     req: Request<Body>,
     cfg: &'static Config,
     log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
 ) -> ResponseFuture {
-    // handle GETs as their own thing since they are unauthenticated
-    if req.method() == &Method::GET {
-        match (req.method(), req.uri().path()) {
-            (&Method::GET, "/test") => {
-                let (tx, body) = hyper::Body::channel();
-
-                hyper::rt::spawn({
-                    stream::iter_ok(0..10)
-                        .fold(tx, |tx, i| {
-                            tx.send(Chunk::from(format!("Message {} from spawned task", i)))
-                                .map_err(|e| {
-                                    println!("error = {:?}", e.to_string());
-                                })
-                        })
-                        .map(|_| ()) // Drop tx handle
-                });
-
-                return Box::new(future::ok(Response::new(body)));
-            }
-            (&Method::GET, "/") | (&Method::GET, "/index.html") => {
-                let body = Body::from(INDEX_BODY);
-                return Box::new(future::ok(Response::new(body)));
-            }
-            _ => {
-                // Return 404 not found response.
-                return Box::new(future::ok(return_404()));
-            }
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, "/") => {
+            let body = Body::from(INDEX_BODY);
+            Box::new(future::ok(Response::new(body)))
         }
-    }
 
-    // POST and PUT request are authenticated, let's validate ACCESS/SECRET before continuing
-    let access_token = match validate_token_from_header(&cfg, &req) {
-        HeaderToken::NoToken => return Box::new(future::ok(return_401())),
-        HeaderToken::InvalidToken => return Box::new(future::ok(return_400("Invalid token"))),
-        HeaderToken::Token(tok) => tok,
-    };
-    // POST is used for search queries
-    if req.method() == &Method::POST {
-        match (req.method(), req.uri().path()) {
-            (&Method::POST, "/search") => api_log_search(&cfg, req, &access_token),
-            _ => {
-                // Return 404 not found response.
-                return Box::new(future::ok(return_404()));
-            }
-        }
-    } else {
-        // Means we got a PUT operation, this can be validated for access immediately
-        let requested_log = match requested_log_from_request(&req) {
-            Ok(ln) => ln,
-            Err(e) => {
-                error!("Failed to load configuration: {}", e);
-                return Box::new(future::ok(return_404()));
-            }
-        };
+        (&Method::POST, "/search") => match extract_auth_token(&req, cfg) {
+            Ok(tok) => api_log_search(&cfg, req, &tok),
+            Err(err_resp) => err_resp,
+        },
 
-        // is this a valid requested_log? else reject
-        match cfg.get_log(&requested_log.name) {
-            Some(_) => {} // if we get a log it's valid
-            _ => {
-                info!("Attemped access of unknow log {}", requested_log.name);
-                return Box::new(future::ok(return_404()));
+        (&Method::PUT, _pth) => {
+            match requested_log_from_request(&req) {
+                Err(e) => {
+                    error!("Failed to load configuration: {}", e);
+                    Box::new(future::ok(return_404()))
+                }
+                Ok(req_log) => {
+                    // Does log exist in config?
+                    if cfg.get_log(&req_log.name).is_none() {
+                        info!("Attemped access of unknow log {}", req_log.name);
+                        return Box::new(future::ok(return_404()));
+                    }
+
+                    let access_token = match extract_auth_token(&req, cfg) {
+                        Ok(tok) => tok,
+                        Err(err_resp) => return err_resp,
+                    };
+
+                    // Does the provided token have access to this log?
+                    if !token_has_access_to_log(&cfg, &access_token, &req_log.name) {
+                        return Box::new(future::ok(return_401()));
+                    }
+
+                    if &req_log.method[..] != "store" {
+                        // Return 404 not found response.
+                        return Box::new(future::ok(return_404()));
+                    }
+
+                    api_log_store(cfg, req, log_ingest_buffers)
+                }
             }
         }
 
-        // does the provided token have access to this log?
-        if !token_has_access_to_log(&cfg, &access_token, &requested_log.name) {
-            return Box::new(future::ok(return_401()));
-        }
-
-        match (req.method(), &requested_log.method[..]) {
-            (&Method::PUT, "store") => api_log_store(cfg, req, log_ingest_buffers),
-            _ => {
-                // Return 404 not found response.
-                return Box::new(future::ok(return_404()));
-            }
-        }
+        _ => Box::new(future::ok(return_404())),
     }
 }
 
