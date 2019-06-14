@@ -16,8 +16,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io;
-use std::io::prelude::*;
+use std::io::{self, Read};
 use std::process;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -102,91 +101,78 @@ pub fn run() {
         })
     };
 
-    if cfg.server.is_some() && cfg.server.as_ref().unwrap().pkcs12_cert.is_some() {
-        let server = match &cfg.server {
-            Some(s) => s,
-            None => panic!("No server configuration"),
-        };
+    let server_cfg = match &cfg.server {
+        Some(s) => s,
+        None => panic!("No server configuration"),
+    };
 
-        let pkcs12_cert = match &server.pkcs12_cert {
-            Some(v) => v.clone(),
-            None => panic!("Missing pcks12 path"),
-        };
-        let pkcs12_pass = match &server.pkcs12_password {
-            Some(v) => v.clone(),
-            None => panic!("Missing pcks12 password"),
-        };
+    match (&server_cfg.pkcs12_cert, &server_cfg.pkcs12_password) {
+        (Some(pkcs12_cert), Some(pkcs12_pass)) => {
+            // HTTPS server
+            let mut der = Vec::new();
 
-        let mut f = match File::open(&pkcs12_cert[..]) {
-            Ok(v) => v,
-            Err(e) => {
-                println!("PKCS12 Cert not found: {:?}", e);
-                process::exit(0x0100);
-            }
-        };
+            // Read cert file into der
+            File::open(&pkcs12_cert[..])
+                .expect("PKCS12 cert not found")
+                .read_to_end(&mut der)
+                .expect("Could not read file");
 
-        let mut der = Vec::new();
-        // read the whole file
-        match f.read_to_end(&mut der) {
-            Ok(_) => (),
-            Err(e) => {
-                println!("Could not read file: {:?}", e);
-                process::exit(0x0100);
-            }
-        };
+            let cert = Identity::from_pkcs12(&der, &pkcs12_pass[..]).unwrap();
 
-        let cert = Identity::from_pkcs12(&der, &pkcs12_pass[..]).unwrap();
+            let tls_cx = TlsAcceptor::builder(cert).build().unwrap();
+            let tls_cx = tokio_tls::TlsAcceptor::from(tls_cx);
 
-        let tls_cx = TlsAcceptor::builder(cert).build().unwrap();
-        let tls_cx = tokio_tls::TlsAcceptor::from(tls_cx);
+            hyper::rt::run(future::lazy(move || {
+                start_ingestion_flush_task(&cfg, ingest_buffer_interval);
 
-        hyper::rt::run(future::lazy(move || {
-            start_ingestion_flush_task(&cfg, ingest_buffer_interval);
+                let srv = TcpListener::bind(&addr).expect("Error binding local port");
+                // Use lower lever hyper API to be able to intercept client connection
+                let http_proto = Http::new();
+                let server = http_proto
+                    .serve_incoming(
+                        srv.incoming().and_then(move |socket| {
+                            tls_cx
+                                .accept(socket)
+                                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                        }),
+                        new_service,
+                    )
+                    .then(|res| match res {
+                        Ok(conn) => Ok(Some(conn)),
+                        Err(e) => {
+                            eprintln!("Error: {}", e);
+                            Ok(None)
+                        }
+                    })
+                    .for_each(|conn_opt| {
+                        if let Some(conn) = conn_opt {
+                            hyper::rt::spawn(
+                                conn.and_then(|c| c.map_err(|e| panic!("Hyper error {}", e)))
+                                    .map_err(|e| eprintln!("Connection error {}", e)),
+                            );
+                        }
 
-            let srv = TcpListener::bind(&addr).expect("Error binding local port");
-            // Use lower lever hyper API to be able to intercept client connection
-            let http_proto = Http::new();
-            let server = http_proto
-                .serve_incoming(
-                    srv.incoming().and_then(move |socket| {
-                        tls_cx
-                            .accept(socket)
-                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-                    }),
-                    new_service,
-                )
-                .then(|res| match res {
-                    Ok(conn) => Ok(Some(conn)),
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                        Ok(None)
-                    }
-                })
-                .for_each(|conn_opt| {
-                    if let Some(conn) = conn_opt {
-                        hyper::rt::spawn(
-                            conn.and_then(|c| c.map_err(|e| panic!("Hyper error {}", e)))
-                                .map_err(|e| eprintln!("Connection error {}", e)),
-                        );
-                    }
+                        Ok(())
+                    });
 
-                    Ok(())
-                });
+                info!("Listening on https://{}", addr);
 
-            info!("Listening on https://{}", addr);
+                server
+            }));
+        }
+        (None, None) => {
+            // HTTP server
+            hyper::rt::run(future::lazy(move || {
+                start_ingestion_flush_task(&cfg, ingest_buffer_interval);
 
-            server
-        }));
-    } else {
-        hyper::rt::run(future::lazy(move || {
-            start_ingestion_flush_task(&cfg, ingest_buffer_interval);
-
-            let server = Server::bind(&addr)
-                .serve(new_service)
-                .map_err(|e| eprintln!("server error: {}", e));
-            info!("Listening on http://{}", addr);
-            server
-        }));
+                let server = Server::bind(&addr)
+                    .serve(new_service)
+                    .map_err(|e| eprintln!("server error: {}", e));
+                info!("Listening on http://{}", addr);
+                server
+            }));
+        }
+        _ => panic!("PKCS12 cert or password is missing"),
     }
 }
 
