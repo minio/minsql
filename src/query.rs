@@ -40,6 +40,7 @@ use crate::constants::SF_IP;
 use crate::constants::SF_QUOTED;
 use crate::constants::SF_URL;
 use crate::dialect::MinSQLDialect;
+use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::storage::list_msl_bucket_files;
@@ -227,373 +228,265 @@ pub fn api_log_search(
     let access_token = access_token.clone();
 
     // A web api to run against
-    Box::new(req.into_body()
-        .concat2() // Concatenate all chunks in the body
-        .from_err()
-        .and_then(move |entire_body| {
-            let ast = match parse_query(entire_body) {
-                Ok(v) => v,
-                Err(e) => {
-                    error!("Problem parsing query {:?}", e);
-                    let response = Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .header(header::CONTENT_TYPE, "text/plain")
-                        .body(Body::from("Bad request"))?;
-                    return Ok(response);
-                }
-            };
-            match validate_logs(&cfg, &ast) {
-                None => (),
-                Some(_) => {
-                    let response = Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .header(header::CONTENT_TYPE, "text/plain")
-                        .body(Body::from("Invalid log name"))?;
-                    return Ok(response);
-                }
-            };
-            // Translate the SQL AST into a `QueryParsing` that has all the elements needed to continue
-            let queries_parse = match process_sql(&cfg, &access_token, &ast) {
-                ProcessedQuery::TranslatedQuery(v) => v,
-                ProcessedQuery::Error(f) => match f {
-                    ProcessingQueryError::Fail(s) => {
+    Box::new(
+        req.into_body()
+            .concat2() // Concatenate all chunks in the body
+            .from_err()
+            .and_then(move |entire_body| {
+                let ast = match parse_query(entire_body) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        error!("Problem parsing query {:?}", e);
                         let response = Response::builder()
                             .status(StatusCode::BAD_REQUEST)
                             .header(header::CONTENT_TYPE, "text/plain")
-                            .body(Body::from(s.clone()))?;
+                            .body(Body::from("Bad request"))?;
                         return Ok(response);
                     }
-                    ProcessingQueryError::UnsupportedQuery(s) => {
+                };
+                match validate_logs(&cfg, &ast) {
+                    None => (),
+                    Some(_) => {
                         let response = Response::builder()
                             .status(StatusCode::BAD_REQUEST)
                             .header(header::CONTENT_TYPE, "text/plain")
-                            .body(Body::from(s.clone()))?;
+                            .body(Body::from("Invalid log name"))?;
                         return Ok(response);
                     }
-                    ProcessingQueryError::NoTableFound(s) => {
-                        let response = Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .header(header::CONTENT_TYPE, "text/plain")
-                            .body(Body::from(s.clone()))?;
-                        return Ok(response);
-                    }
-                    ProcessingQueryError::Unauthorized(s) => {
-                        let response = Response::builder()
-                            .status(StatusCode::UNAUTHORIZED)
-                            .header(header::CONTENT_TYPE, "text/plain")
-                            .body(Body::from(s.clone()))?;
-                        return Ok(response);
-                    }
-                },
-            };
+                };
+                // Translate the SQL AST into a `QueryParsing` that has all the elements needed to continue
+                let queries_parse = match process_sql(&cfg, &access_token, &ast) {
+                    ProcessedQuery::TranslatedQuery(v) => v,
+                    ProcessedQuery::Error(f) => match f {
+                        ProcessingQueryError::Fail(s) => {
+                            let response = Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .header(header::CONTENT_TYPE, "text/plain")
+                                .body(Body::from(s.clone()))?;
+                            return Ok(response);
+                        }
+                        ProcessingQueryError::UnsupportedQuery(s) => {
+                            let response = Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .header(header::CONTENT_TYPE, "text/plain")
+                                .body(Body::from(s.clone()))?;
+                            return Ok(response);
+                        }
+                        ProcessingQueryError::NoTableFound(s) => {
+                            let response = Response::builder()
+                                .status(StatusCode::BAD_REQUEST)
+                                .header(header::CONTENT_TYPE, "text/plain")
+                                .body(Body::from(s.clone()))?;
+                            return Ok(response);
+                        }
+                        ProcessingQueryError::Unauthorized(s) => {
+                            let response = Response::builder()
+                                .status(StatusCode::UNAUTHORIZED)
+                                .header(header::CONTENT_TYPE, "text/plain")
+                                .body(Body::from(s.clone()))?;
+                            return Ok(response);
+                        }
+                    },
+                };
 
-            // if we reach this point, no query was invalid
-            let (tx, rx) = mpsc::unbounded_channel();
-            let (body_tx, body) = hyper::Body::channel();
+                // if we reach this point, no query was invalid
+                let (tx, rx) = mpsc::unbounded_channel();
+                let (body_tx, body) = hyper::Body::channel();
 
-            let ast = ast.clone();
-            let cfg = cfg.clone();
-            let queries_parse = queries_parse.clone();
+                let ast = ast.clone();
+                let cfg = cfg.clone();
+                let queries_parse = queries_parse.clone();
 
-            // producer task
-            hyper::rt::spawn({
-                // for each query, retrive data
-                stream::iter_ok(ast).fold(tx, move |tx, query| {
-                    let query_data = queries_parse.get(&query.to_string()[..]).unwrap();
+                // producer task
+                hyper::rt::spawn({
+                    // for each query, retrive data
+                    stream::iter_ok(ast)
+                        .fold(tx, move |tx, query| {
+                            let query_data = queries_parse.get(&query.to_string()[..]).unwrap();
 
-                    // We'll pass this mutex to signal how many lines have been read if there's any limitation
-                    let max_lines_to_read: Arc<Mutex<Option<u64>>> = Arc::new(Mutex::new(query_data.limit));
+                            // We'll pass this mutex to signal how many lines have been read if there's any limitation
+                            let max_lines_to_read: Arc<Mutex<Option<u64>>> =
+                                Arc::new(Mutex::new(query_data.limit));
 
-                    // should be safe to unwrap since query validation made sure the log exists
-                    let log = cfg.get_log(&query_data.log_name).unwrap();
+                            // should be safe to unwrap since query validation made sure the log exists
+                            let log = cfg.get_log(&query_data.log_name).unwrap();
 
-                    let log = log.clone();
-                    let my_ds: Vec<DataStore> = cfg.datastore.iter().map(|(_, y)| y.clone()).collect();
-                    let queries_parse = queries_parse.clone();
-                    let query = query.clone();
-                    let max_lines = Arc::clone(&max_lines_to_read);
-                    stream::iter_ok(my_ds).fold(tx, move |tx, ds| {
-                        let log_name = log.name.clone().unwrap();
-                        let msl_files = match list_msl_bucket_files(&log_name[..], &ds) {
-                            Ok(mf) => mf,
-                            Err(e) => {
-                                // TODO: Handler Error. Ideally, we should end the channel and terminate the stream
-                                // use take_while http://xion.io/post/code/rust-stream-terminate.html with Result
-                                error!("error reading files from minIO {:?}", e);
-                                Vec::new()
-                            }
-                        };
-                        // for each file found inside the log
-                        let ds = ds.clone();
-                        let queries_parse = queries_parse.clone();
-                        let query = query.clone();
-                        let max_lines = Arc::clone(&max_lines);
-                        stream::iter_ok(msl_files).fold(tx, move |tx, f| {
-
-                            // Don't read the file if we have maxed out the lines to return
-                            let mut max_tak: Option<u64>;
-                            let protected_data = max_lines.lock().unwrap();
-                            max_tak = protected_data.clone();
-                            drop(protected_data);
-                            //  Based on the content of max_tak we will determine wether or not to
-                            // read the file. Ee do this so if we are already reached the LIMIT provided
-                            // we simply stop reading files.
-                            let mut should_read_file = false;
-                            if max_tak.is_some() {
-                                if max_tak.unwrap() > 0 {
-                                    // TODO: Ideally we want to work with the streaming body
-                                    should_read_file = true;
-                                }
-                            } else {
-                                // else take as many as we can (18,446,744,073,709,551,615 lines)
-                                max_tak = Some(std::u64::MAX);
-                                // TODO: Ideally we want to work with the streaming body
-                                should_read_file = true;
-                            }
-                            let mut all_file_lines = String::new();
-                            if should_read_file {
-                                all_file_lines = match read_file(&f, &ds) {
-                                    Ok(l) => l,
-                                    Err(e) => {
-                                        error!("problem reading file {}", e);
-                                        // TODO: Handle error. Ideally, we want to stop the channel
-                                        "".to_string()
-                                    }
-                                };
-                            }
-
-
-                            let individual_lines: Vec<String> = all_file_lines.lines().map(|x| x.to_string()).collect();
+                            let log = log.clone();
+                            let my_ds: Vec<DataStore> =
+                                cfg.datastore.iter().map(|(_, y)| y.clone()).collect();
                             let queries_parse = queries_parse.clone();
                             let query = query.clone();
-                            let max_lines = Arc::clone(&max_lines);
-                            stream::iter_ok(individual_lines).take(max_tak.unwrap()).fold(tx, move |tx, line| {
-                                let mut projection_values: HashMap<String, String> = HashMap::new();
-                                let query_data = queries_parse.get(&query.to_string()[..]).unwrap();
-                                // if we have position columns, process
-                                if query_data.positional_fields.len() > 0 {
-                                    // TODO: Use separator construct from header
-                                    let parts: Vec<&str> = line.split(" ").collect();
-                                    for pos in &query_data.positional_fields {
-                                        if pos.position - 1 < (parts.len() as i32) {
-                                            projection_values.insert(pos.alias.clone(), parts[(pos.position - 1) as usize].to_string());
-                                        } else {
-                                            projection_values.insert(pos.alias.clone(), "".to_string());
-                                        }
+                            let max_lines = Arc::clone(&max_lines_to_read);
+                            stream::iter_ok(my_ds).fold(tx, move |tx, ds| {
+                                let log_name = log.name.clone().unwrap();
+                                let msl_files = match list_msl_bucket_files(&log_name[..], &ds) {
+                                    Ok(mf) => mf,
+                                    Err(e) => {
+                                        // TODO: Handler Error. Ideally, we should end the channel and terminate the stream
+                                        // use take_while http://xion.io/post/code/rust-stream-terminate.html with Result
+                                        error!("error reading files from minIO {:?}", e);
+                                        Vec::new()
                                     }
-                                }
-
-                                if query_data.smart_fields.len() > 0 {
-                                    let found_vals = scanlog(&line.to_string(), query_data.scan_flags);
-                                    for smt in &query_data.smart_fields {
-                                        if found_vals.contains_key(&smt.typed[..]) {
-                                            // if the requested position is available
-                                            if smt.position - 1 < (found_vals[&smt.typed].len() as i32) {
-                                                projection_values.insert(smt.alias.clone(), found_vals[&smt.typed][(smt.position - 1) as usize].clone());
-                                            } else {
-                                                projection_values.insert(smt.alias.clone(), "".to_string());
+                                };
+                                // for each file found inside the log
+                                let ds = ds.clone();
+                                let queries_parse = queries_parse.clone();
+                                let query = query.clone();
+                                let max_lines = Arc::clone(&max_lines);
+                                stream::iter_ok(msl_files).fold(tx, move |tx, f| {
+                                    // Don't read the file if we have maxed out the lines to return
+                                    let mut max_tak: Option<u64>;
+                                    let protected_data = max_lines.lock().unwrap();
+                                    max_tak = protected_data.clone();
+                                    drop(protected_data);
+                                    //  Based on the content of max_tak we will determine wether or not to
+                                    // read the file. Ee do this so if we are already reached the LIMIT provided
+                                    // we simply stop reading files.
+                                    let mut should_read_file = false;
+                                    if max_tak.is_some() {
+                                        if max_tak.unwrap() > 0 {
+                                            // TODO: Ideally we want to work with the streaming body
+                                            should_read_file = true;
+                                        }
+                                    } else {
+                                        // else take as many as we can (18,446,744,073,709,551,615 lines)
+                                        max_tak = Some(std::u64::MAX);
+                                        // TODO: Ideally we want to work with the streaming body
+                                        should_read_file = true;
+                                    }
+                                    let mut all_file_lines = String::new();
+                                    if should_read_file {
+                                        all_file_lines = match read_file(&f, &ds) {
+                                            Ok(l) => l,
+                                            Err(e) => {
+                                                error!("problem reading file {}", e);
+                                                // TODO: Handle error. Ideally, we want to stop the channel
+                                                "".to_string()
                                             }
-                                        }
+                                        };
                                     }
-                                }
 
-                                // filter the line
-                                let mut skip_line = false;
-                                match query {
-                                    sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => {
-                                        match q.body {
-                                            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                                                let mut all_conditions_pass = true;
-                                                for slct in &bodyselect.selection {
-                                                    match slct {
-                                                        sqlparser::sqlast::ASTNode::SQLIsNotNull(ast) => {
-                                                            let identifier = match **ast {
-                                                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
-                                                                    identifier.to_string()
-                                                                }
-                                                                _ => {
-                                                                    // TODO: Should we be retunring anything at all?
-                                                                    "".to_string()
-                                                                }
-                                                            };
-                                                            if projection_values.contains_key(&identifier[..]) == false || projection_values[&identifier] == "" {
-                                                                all_conditions_pass = false;
-                                                            }
-                                                        }
-                                                        sqlparser::sqlast::ASTNode::SQLIsNull(ast) => {
-                                                            let identifier = match **ast {
-                                                                sqlparser::sqlast::ASTNode::SQLIdentifier(ref identifier) => {
-                                                                    identifier.to_string()
-                                                                }
-                                                                _ => {
-                                                                    // TODO: Should we be retunring anything at all?
-                                                                    "".to_string()
-                                                                }
-                                                            };
-                                                            if projection_values[&identifier] != "" {
-                                                                all_conditions_pass = false;
-                                                            }
-                                                        }
-                                                        sqlparser::sqlast::ASTNode::SQLBinaryOp { left, op, right } => {
-                                                            let identifier = left.to_string();
+                                    let individual_lines: Vec<String> =
+                                        all_file_lines.lines().map(|x| x.to_string()).collect();
+                                    let queries_parse = queries_parse.clone();
+                                    let query = query.clone();
+                                    let max_lines = Arc::clone(&max_lines);
+                                    stream::iter_ok(individual_lines)
+                                        .take(max_tak.unwrap())
+                                        .fold(tx, move |tx, line| {
+                                            let mut projection_values: HashMap<String, String> =
+                                                HashMap::new();
+                                            let query_data =
+                                                queries_parse.get(&query.to_string()[..]).unwrap();
+                                            // if we have position columns, process
+                                            if query_data.positional_fields.len() > 0 {
+                                                // TODO: Use separator construct from header
+                                                let parts: Vec<&str> = line.split(" ").collect();
+                                                for pos in &query_data.positional_fields {
+                                                    if pos.position - 1 < (parts.len() as i32) {
+                                                        projection_values.insert(
+                                                            pos.alias.clone(),
+                                                            parts[(pos.position - 1) as usize]
+                                                                .to_string(),
+                                                        );
+                                                    } else {
+                                                        projection_values.insert(
+                                                            pos.alias.clone(),
+                                                            "".to_string(),
+                                                        );
+                                                    }
+                                                }
+                                            }
 
-                                                            match op {
-                                                                sqlparser::sqlast::SQLBinaryOperator::Eq => {
-                                                                    // TODO: Optimize this op_value preparation, don't do it in the loop
-                                                                    let op_value = match **right {
-                                                                        sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
-                                                                            // Did they used double quotes for the value?
-                                                                            let mut str_id = right_value.to_string();
-                                                                            if str_id.starts_with("\"") {
-                                                                                str_id = str_id[1..][..str_id.len() - 2].to_string();
-                                                                            }
-                                                                            str_id
-                                                                        }
-                                                                        sqlparser::sqlast::ASTNode::SQLValue(ref right_value) => {
-                                                                            match right_value {
-                                                                                sqlparser::sqlast::Value::SingleQuotedString(s) => { s.to_string() }
-                                                                                _ => { right_value.to_string() }
-                                                                            }
-                                                                        }
-                                                                        _ => {
-                                                                            "".to_string()
-                                                                        }
-                                                                    };
-
-                                                                    if projection_values.contains_key(&identifier[..]) && projection_values[&identifier] != op_value {
-                                                                        all_conditions_pass = false;
-                                                                    }
-                                                                }
-                                                                sqlparser::sqlast::SQLBinaryOperator::NotEq => {
-                                                                    // TODO: Optimize this op_value preparation, don't do it in the loop
-                                                                    let op_value = match **right {
-                                                                        sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
-                                                                            // Did they used double quotes for the value?
-                                                                            let mut str_id = right_value.to_string();
-                                                                            if str_id.starts_with("\"") {
-                                                                                str_id = str_id[1..][..str_id.len() - 2].to_string();
-                                                                            }
-                                                                            str_id
-                                                                        }
-                                                                        sqlparser::sqlast::ASTNode::SQLValue(ref right_value) => {
-                                                                            match right_value {
-                                                                                sqlparser::sqlast::Value::SingleQuotedString(s) => { s.to_string() }
-                                                                                _ => { right_value.to_string() }
-                                                                            }
-                                                                        }
-                                                                        _ => {
-                                                                            "".to_string()
-                                                                        }
-                                                                    };
-                                                                    if projection_values.contains_key(&identifier[..]) && projection_values[&identifier] == op_value {
-                                                                        all_conditions_pass = false;
-                                                                    }
-                                                                }
-                                                                sqlparser::sqlast::SQLBinaryOperator::Like => {
-                                                                    // TODO: Optimize this op_value preparation, don't do it in the loop
-                                                                    let op_value = match **right {
-                                                                        sqlparser::sqlast::ASTNode::SQLIdentifier(ref right_value) => {
-                                                                            // Did they used double quotes for the value?
-                                                                            let mut str_id = right_value.to_string();
-                                                                            if str_id.starts_with("\"") {
-                                                                                str_id = str_id[1..][..str_id.len() - 2].to_string();
-                                                                            }
-                                                                            str_id
-                                                                        }
-                                                                        sqlparser::sqlast::ASTNode::SQLValue(ref right_value) => {
-                                                                            match right_value {
-                                                                                sqlparser::sqlast::Value::SingleQuotedString(s) => { s.to_string() }
-                                                                                _ => { right_value.to_string() }
-                                                                            }
-                                                                        }
-                                                                        _ => {
-                                                                            "".to_string()
-                                                                        }
-                                                                    };
-                                                                    // TODO: Add support for wildcards ie: LIKE 'server_.domain.com' where _ is a single character wildcard
-                                                                    if identifier == "$line" {
-                                                                        if line.contains(&op_value[..]) == false {
-                                                                            all_conditions_pass = false;
-                                                                        }
-                                                                    } else {
-                                                                        if projection_values.contains_key(&identifier[..]) && projection_values[&identifier].contains(&op_value[..]) == false {
-                                                                            all_conditions_pass = false;
-                                                                        }
-                                                                    }
-                                                                }
-                                                                _ => {
-                                                                    info!("Unhandled operator");
-                                                                }
-                                                            }
-                                                        }
-                                                        _ => {
-                                                            info!("Unhandled operation");
+                                            if query_data.smart_fields.len() > 0 {
+                                                let found_vals = scanlog(
+                                                    &line.to_string(),
+                                                    query_data.scan_flags,
+                                                );
+                                                for smt in &query_data.smart_fields {
+                                                    if found_vals.contains_key(&smt.typed[..]) {
+                                                        // if the requested position is available
+                                                        if smt.position - 1
+                                                            < (found_vals[&smt.typed].len() as i32)
+                                                        {
+                                                            projection_values.insert(
+                                                                smt.alias.clone(),
+                                                                found_vals[&smt.typed]
+                                                                    [(smt.position - 1) as usize]
+                                                                    .clone(),
+                                                            );
+                                                        } else {
+                                                            projection_values.insert(
+                                                                smt.alias.clone(),
+                                                                "".to_string(),
+                                                            );
                                                         }
                                                     }
                                                 }
-                                                if all_conditions_pass == false {
-                                                    skip_line = true;
+                                            }
+
+                                            // filter the line
+                                            let skip_line = line_fails_query_conditions(
+                                                &line,
+                                                &query,
+                                                &projection_values,
+                                            );
+
+                                            let mut outline: String = String::new();
+
+                                            if skip_line == false {
+                                                if query_data.read_all {
+                                                    outline = line.clone();
+                                                    outline.push('\n');
+                                                } else {
+                                                    // build the result
+                                                    // iterate over the ordered resulting projections
+                                                    let mut field_values: Vec<String> = Vec::new();
+                                                    for proj in &query_data.projections_ordered {
+                                                        // check if it's in positionsals
+                                                        if projection_values.contains_key(proj) {
+                                                            field_values.push(
+                                                                projection_values[proj].clone(),
+                                                            );
+                                                        }
+                                                    }
+                                                    // TODO: When adding CSV output, change the separator
+                                                    outline = field_values.join(" ");
+                                                    outline.push('\n');
                                                 }
                                             }
-                                            _ => {}
-                                        }
-                                    }
-                                    _ => {}
-                                };
-
-                                let mut outline: String = String::new();
-
-                                if skip_line == false {
-                                    if query_data.read_all {
-                                        outline = line.clone();
-                                        outline.push('\n');
-                                    } else {
-                                        // build the result
-                                        // iterate over the ordered resulting projections
-                                        let mut field_values: Vec<String> = Vec::new();
-                                        for proj in &query_data.projections_ordered {
-                                            // check if it's in positionsals
-                                            if projection_values.contains_key(proj) {
-                                                field_values.push(projection_values[proj].clone());
+                                            // increase line counter
+                                            let mut protected_data = max_lines.lock().unwrap();
+                                            let data = *protected_data;
+                                            if data.is_some() {
+                                                *protected_data = Some(data.unwrap() - 1);
                                             }
-                                        }
-                                        // TODO: When adding CSV output, change the separator
-                                        outline = field_values.join(" ");
-                                        outline.push('\n');
-                                    }
-                                }
-                                // increase line counter
-                                let mut protected_data = max_lines.lock().unwrap();
-                                let data = *protected_data;
-                                if data.is_some() {
-                                    *protected_data = Some(data.unwrap() - 1);
-                                }
-                                drop(protected_data);
-                                tx.send(outline).map_err(|e| println!("{:?}", e))
+                                            drop(protected_data);
+                                            tx.send(outline).map_err(|e| println!("{:?}", e))
+                                        })
+                                })
                             })
                         })
-                    })
-                }).map(|_| ()) // Drop tx handle
-            });
+                        .map(|_| ()) // Drop tx handle
+                });
 
-            // consumer task
-            hyper::rt::spawn({
-                rx
-                    .map_err(|e| {
+                // consumer task
+                hyper::rt::spawn({
+                    rx.map_err(|e| {
                         println!("{:?}", e);
                     })
                     .fold(body_tx, move |body_tx, msg| {
-                        body_tx.send(Chunk::from(msg))
+                        body_tx
+                            .send(Chunk::from(msg))
                             .map_err(|e| println!("error = {:?}", e))
                     })
                     .map(|_| ()) // drop body_tx handle
-            });
+                });
 
-
-            let duration = start.elapsed();
-            info!("Search took: {:?}", duration);
-            Ok(Response::new(body))
-        })
+                let duration = start.elapsed();
+                info!("Search took: {:?}", duration);
+                Ok(Response::new(body))
+            }),
     )
 }
 

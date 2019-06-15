@@ -40,6 +40,7 @@ mod auth;
 mod config;
 mod constants;
 mod dialect;
+mod filter;
 mod http;
 mod ingest;
 mod query;
