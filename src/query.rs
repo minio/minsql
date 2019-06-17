@@ -23,7 +23,7 @@ use std::time::Instant;
 use bitflags::bitflags;
 use futures::Sink;
 use futures::{stream, Future, Stream};
-use hyper::{header, Body, Chunk, Request, Response, StatusCode};
+use hyper::{Body, Chunk, Request, Response};
 use lazy_static::lazy_static;
 use log::{error, info};
 use regex::Regex;
@@ -43,6 +43,7 @@ use crate::dialect::MinSQLDialect;
 use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
+use crate::http::{return_400, return_401};
 use crate::storage::list_msl_bucket_files;
 use crate::storage::read_file;
 
@@ -236,22 +237,13 @@ pub fn api_log_search(
                 let ast = match parse_query(entire_body) {
                     Ok(v) => v,
                     Err(e) => {
-                        error!("Problem parsing query {:?}", e);
-                        let response = Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .header(header::CONTENT_TYPE, "text/plain")
-                            .body(Body::from("Bad request"))?;
-                        return Ok(response);
+                        return Ok(return_400(format!("{:?}", e).as_str()));
                     }
                 };
                 match validate_logs(&cfg, &ast) {
                     None => (),
                     Some(_) => {
-                        let response = Response::builder()
-                            .status(StatusCode::BAD_REQUEST)
-                            .header(header::CONTENT_TYPE, "text/plain")
-                            .body(Body::from("Invalid log name"))?;
-                        return Ok(response);
+                        return Ok(return_400("invalid log name"));
                     }
                 };
                 // Translate the SQL AST into a `QueryParsing` that has all the elements needed to continue
@@ -259,32 +251,16 @@ pub fn api_log_search(
                     ProcessedQuery::TranslatedQuery(v) => v,
                     ProcessedQuery::Error(f) => match f {
                         ProcessingQueryError::Fail(s) => {
-                            let response = Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .header(header::CONTENT_TYPE, "text/plain")
-                                .body(Body::from(s.clone()))?;
-                            return Ok(response);
+                            return Ok(return_400(s.clone().as_str()));
                         }
                         ProcessingQueryError::UnsupportedQuery(s) => {
-                            let response = Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .header(header::CONTENT_TYPE, "text/plain")
-                                .body(Body::from(s.clone()))?;
-                            return Ok(response);
+                            return Ok(return_400(s.clone().as_str()));
                         }
                         ProcessingQueryError::NoTableFound(s) => {
-                            let response = Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .header(header::CONTENT_TYPE, "text/plain")
-                                .body(Body::from(s.clone()))?;
-                            return Ok(response);
+                            return Ok(return_400(s.clone().as_str()));
                         }
-                        ProcessingQueryError::Unauthorized(s) => {
-                            let response = Response::builder()
-                                .status(StatusCode::UNAUTHORIZED)
-                                .header(header::CONTENT_TYPE, "text/plain")
-                                .body(Body::from(s.clone()))?;
-                            return Ok(response);
+                        ProcessingQueryError::Unauthorized(_s) => {
+                            return Ok(return_401());
                         }
                     },
                 };

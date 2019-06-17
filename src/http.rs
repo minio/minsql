@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use futures::{future, Future};
-use hyper::{Body, Method, Request, Response, StatusCode};
+use hyper::{header, Body, Method, Request, Response, StatusCode};
 
 use crate::auth::token_has_access_to_log;
 use crate::config::Config;
@@ -53,6 +53,7 @@ pub fn return_400(message: &str) -> Response<Body> {
     let body = Body::from(format!("Bad request: {}", &message));
     Response::builder()
         .status(StatusCode::BAD_REQUEST)
+        .header(header::CONTENT_TYPE, "text/plain")
         .body(body)
         .unwrap()
 }
