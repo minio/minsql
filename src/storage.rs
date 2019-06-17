@@ -118,8 +118,7 @@ fn client_for_datastore(datastore: &DataStore) -> S3Client {
         endpoint: datastore.endpoint.clone(),
     };
     // Build the client
-    let s3_client = S3Client::new_with(dispatcher, provider, region);
-    s3_client
+    S3Client::new_with(dispatcher, provider, region)
 }
 
 // <p>Function used to verify if a datastore is valid in terms of reachability</p>
@@ -127,7 +126,7 @@ pub fn can_reach_datastore(datastore: &DataStore) -> bool {
     // Get the Object Storage client
     let s3_client = client_for_datastore(&datastore);
     // perform list call to verify we have access
-    match s3_client
+    s3_client
         .list_objects(ListObjectsRequest {
             bucket: datastore.bucket.clone(),
             delimiter: None,
@@ -138,13 +137,12 @@ pub fn can_reach_datastore(datastore: &DataStore) -> bool {
             request_payer: None,
         })
         .sync()
-    {
-        Ok(_) => true,
-        Err(e) => {
+        .map_err(|e| {
             info!("Cannot access bucket: {}", e);
-            false
-        }
-    }
+            e
+        })
+        .map(|_| true)
+        .unwrap_or(false)
 }
 
 fn str_to_streaming_body(s: String) -> rusoto_s3::StreamingBody {
@@ -195,26 +193,22 @@ pub fn write_to_datastore(
     // turn the payload into a streaming body
     let strbody = str_to_streaming_body(payload.clone());
     // save the payload
-    match s3_client
+    let save_res = s3_client
         .put_object(PutObjectRequest {
             bucket: datastore.bucket.clone(),
             key: destination,
             body: Some(strbody),
             ..Default::default()
         })
-        .sync()
-    {
-        Ok(x) => x,
-        Err(e) => {
-            return Err(WriteDatastoreError::new(
-                &format!("Could not write to datastore: {}", e)[..],
-            ));
-        }
-    };
-    //TODO: Remove this metric
-    let duration = start.elapsed();
-    println!("Writing to minio: {:?}", duration);
-    Ok(true)
+        .sync();
+    save_res
+        .map_err(|e| WriteDatastoreError::new(&format!("Could not write to datastore: {}", e)[..]))
+        .map(|_| {
+            //TODO: Remove this metric
+            let duration = start.elapsed();
+            println!("Writing to minio: {:?}", duration);
+            true
+        })
 }
 
 #[derive(Debug)]
@@ -242,74 +236,58 @@ pub fn list_msl_bucket_files(
     datastore: &DataStore,
 ) -> Result<Vec<String>, ListMslFilesError> {
     let s3_client = client_for_datastore(datastore);
-    let files = match s3_client
+    let objects_res = s3_client
         .list_objects(ListObjectsRequest {
             bucket: datastore.bucket.clone(),
             prefix: Some(format!("minsql/{}", logname)),
             ..Default::default()
         })
-        .sync()
-    {
-        Ok(l) => l,
-        Err(e) => {
-            return Err(ListMslFilesError::new(
-                &format!("Could not list files in datastore: {}", e)[..],
-            ));
-        }
-    };
-    let mut msl_files = Vec::new();
-    for file in files.contents.unwrap() {
-        let fkey = file.key.unwrap();
-        if fkey.contains(".log") {
-            msl_files.push(fkey)
-        }
-    }
-    Ok(msl_files)
+        .sync();
+    objects_res
+        .map(|objects| {
+            objects
+                .contents
+                .unwrap()
+                .iter()
+                .map(|f| f.clone().key.unwrap())
+                .filter(|f| f.contains(".log"))
+                .collect()
+        })
+        .map_err(|e| ListMslFilesError::new(format!("Could not list in datastore: {}", e).as_str()))
 }
 
 // Return the contents of a file from a datastore
 pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, ListMslFilesError> {
     let s3_client = client_for_datastore(datastore);
-    let files = match s3_client
+    let get_object_res = s3_client
         .get_object(GetObjectRequest {
             bucket: datastore.bucket.clone(),
             key: key.clone(),
             ..Default::default()
         })
-        .sync()
-    {
-        Ok(l) => l,
-        Err(e) => {
-            return Err(ListMslFilesError::new(
-                &format!("Could not list files in datastore: {}", e)[..],
-            ));
-        }
-    };
+        .sync();
 
-    let stream = files.body.unwrap();
-    let bytes = stream.concat2().wait().unwrap();
-    let body = String::from_utf8(bytes).unwrap();
-
-    Ok(body)
+    get_object_res
+        .map(|f| {
+            let bytes = f.body.unwrap().concat2().wait().unwrap();
+            String::from_utf8(bytes).unwrap()
+        })
+        .map_err(|e| {
+            ListMslFilesError::new(&format!("Could not list files in datastore: {}", e)[..])
+        })
 }
 
-/// Selects a datastore at random
-/// Will return `None` if the log_name doesn't match a valid `Log` name in the `Config`.
+/// Selects a datastore at random. Will return `None` if the log_name
+/// doesn't match a valid `Log` name in the `Config`.
 fn rand_datastore<'a>(cfg: &'a Config, log_name: &str) -> Option<&'a DataStore> {
-    let log = match cfg.log.get(log_name) {
-        Some(v) => v,
-        None => return None,
-    };
-
-    if log.datastores.is_empty() {
-        return None;
-    }
-    let index = Range::new(0, log.datastores.len()).ind_sample(&mut rand::thread_rng());
-    let datastore_name = match log.datastores.iter().skip(index).next() {
-        Some(v) => v,
-        None => return None,
-    };
-    cfg.datastore.get(&datastore_name[..])
+    cfg.log
+        .get(log_name)
+        .and_then(|log| {
+            let n = log.datastores.len();
+            let i = Range::new(0, n).ind_sample(&mut rand::thread_rng());
+            log.datastores.iter().skip(i).next()
+        })
+        .and_then(|name| cfg.datastore.get(&name[..]))
 }
 
 #[cfg(test)]
