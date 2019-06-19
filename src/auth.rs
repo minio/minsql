@@ -15,10 +15,16 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use crate::config::Config;
+use std::sync::{Arc, RwLock};
 
 /// Checks the configuration hierarchy to validate if a token has access to a log
-pub fn token_has_access_to_log(cfg: &'static Config, access_token: &str, log_name: &str) -> bool {
-    match cfg.auth.get(access_token) {
+pub fn token_has_access_to_log(
+    cfg: Arc<RwLock<Config>>,
+    access_token: &str,
+    log_name: &str,
+) -> bool {
+    let read_cfg = cfg.read().unwrap();
+    match read_cfg.auth.get(access_token) {
         Some(val) => match val.get(log_name) {
             Some(_) => return true,
             None => return false,

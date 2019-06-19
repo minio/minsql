@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use bitflags::bitflags;
@@ -220,35 +220,37 @@ struct QueryParsing {
 
 // performs a query on a log
 pub fn api_log_search(
-    cfg: &'static Config,
+    cfg: Arc<RwLock<Config>>,
     req: Request<Body>,
     access_token: &String,
 ) -> ResponseFuture {
     let start = Instant::now();
 
     let access_token = access_token.clone();
-
+    let cfg3 = Arc::clone(&cfg);
     // A web api to run against
     Box::new(
         req.into_body()
             .concat2() // Concatenate all chunks in the body
             .from_err()
             .and_then(move |entire_body| {
+                let read_cfg = cfg3.read().unwrap();
                 let ast = match parse_query(entire_body) {
                     Ok(v) => v,
                     Err(e) => {
                         return Ok(return_400(format!("{:?}", e).as_str()));
                     }
                 };
-                match validate_logs(&cfg, &ast) {
+                match validate_logs(&read_cfg, &ast) {
                     None => (),
                     Some(_) => {
                         return Ok(return_400("invalid log name"));
                     }
                 };
                 // Translate the SQL AST into a `QueryParsing` that has all the elements needed to continue
+                let cfg4 = Arc::clone(&cfg3);
                 let queries_parse: HashMap<String, QueryParsing> =
-                    match process_sql(&cfg, &access_token, &ast) {
+                    match process_sql(cfg4, &access_token, &ast) {
                         Ok(v) => v.into_iter().collect(),
                         Err(e) => match e {
                             ProcessingQueryError::Fail(s) => {
@@ -271,7 +273,7 @@ pub fn api_log_search(
                 let (body_tx, body) = hyper::Body::channel();
 
                 let ast = ast.clone();
-                let cfg = cfg.clone();
+                let cfg2 = Arc::clone(&cfg);
                 let queries_parse = queries_parse.clone();
 
                 // producer task
@@ -279,6 +281,7 @@ pub fn api_log_search(
                     // for each query, retrive data
                     stream::iter_ok(ast)
                         .fold(tx, move |tx, query| {
+                            let read_cfg2 = cfg2.read().unwrap();
                             let query_data = queries_parse.get(&query.to_string()[..]).unwrap();
 
                             // We'll pass this mutex to signal how many lines have been read if there's any limitation
@@ -286,11 +289,11 @@ pub fn api_log_search(
                                 Arc::new(Mutex::new(query_data.limit));
 
                             // should be safe to unwrap since query validation made sure the log exists
-                            let log = cfg.get_log(&query_data.log_name).unwrap();
+                            let log = read_cfg2.get_log(&query_data.log_name).unwrap();
 
                             let log = log.clone();
                             let my_ds: Vec<DataStore> =
-                                cfg.datastore.iter().map(|(_, y)| y.clone()).collect();
+                                read_cfg2.datastore.iter().map(|(_, y)| y.clone()).collect();
                             let queries_parse = queries_parse.clone();
                             let query = query.clone();
                             let max_lines = Arc::clone(&max_lines_to_read);
@@ -475,7 +478,7 @@ enum ProcessingQueryError {
 }
 
 fn process_statement(
-    cfg: &'static Config,
+    cfg: Arc<RwLock<Config>>,
     access_token: &String,
     query: &SQLStatement,
 ) -> Result<(String, QueryParsing), ProcessingQueryError> {
@@ -511,7 +514,7 @@ fn process_statement(
     let log_name = some_table.unwrap().to_string().clone();
 
     // check if we have access for the requested table
-    if !token_has_access_to_log(&cfg, &access_token[..], &log_name[..]) {
+    if !token_has_access_to_log(cfg, &access_token[..], &log_name[..]) {
         return Err(ProcessingQueryError::Unauthorized(
             "Unauthorized".to_string(),
         ));
@@ -803,12 +806,15 @@ fn process_statement(
 /// Parses a vector sql statements and returns a parsed summary
 /// structure for each.
 fn process_sql(
-    cfg: &'static Config,
+    cfg: Arc<RwLock<Config>>,
     access_token: &String,
     ast: &Vec<SQLStatement>,
 ) -> Result<Vec<(String, QueryParsing)>, ProcessingQueryError> {
     ast.iter()
-        .map(|q| process_statement(&cfg, &access_token, &q))
+        .map(|q| {
+            let cfg2 = Arc::clone(&cfg);
+            process_statement(cfg2, &access_token, &q)
+        })
         .collect()
 }
 

@@ -16,7 +16,7 @@
 
 use log::info;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use futures::{future, Future};
 use hyper::{header, Body, Method, Request, Response, StatusCode};
@@ -75,7 +75,7 @@ pub fn requested_log_from_request(req: &Request<Body>) -> Option<String> {
     }
 }
 
-fn extract_auth_token(req: &Request<Body>, cfg: &'static Config) -> Result<String, ResponseFuture> {
+fn extract_auth_token(req: &Request<Body>, cfg: &Config) -> Result<String, ResponseFuture> {
     match validate_token_from_header(&cfg, &req) {
         HeaderToken::NoToken => Err(Box::new(future::ok(return_401()))),
         HeaderToken::InvalidToken => Err(Box::new(future::ok(return_400("Invalid token")))),
@@ -85,17 +85,19 @@ fn extract_auth_token(req: &Request<Body>, cfg: &'static Config) -> Result<Strin
 
 pub fn request_router(
     req: Request<Body>,
-    cfg: &'static Config,
+    cfg: Arc<RwLock<Config>>,
     log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
 ) -> ResponseFuture {
+    let read_cfg = cfg.read().unwrap();
+    let cfg2 = Arc::clone(&cfg);
     match (req.method(), req.uri().path()) {
         (&Method::GET, "/") => {
             let body = Body::from(INDEX_BODY);
             Box::new(future::ok(Response::new(body)))
         }
 
-        (&Method::POST, "/search") => match extract_auth_token(&req, cfg) {
-            Ok(tok) => api_log_search(&cfg, req, &tok),
+        (&Method::POST, "/search") => match extract_auth_token(&req, &read_cfg) {
+            Ok(tok) => api_log_search(cfg2, req, &tok),
             Err(err_resp) => err_resp,
         },
 
@@ -104,21 +106,21 @@ pub fn request_router(
                 None => Box::new(future::ok(return_404())),
                 Some(name) => {
                     // Does log exist in config?
-                    if cfg.get_log(&name).is_none() {
+                    if read_cfg.get_log(&name).is_none() {
                         info!("Attempted access of unknown log {}", name);
                         return Box::new(future::ok(return_404()));
                     }
 
-                    let access_token = match extract_auth_token(&req, cfg) {
+                    let access_token = match extract_auth_token(&req, &read_cfg) {
                         Ok(tok) => tok,
                         Err(err_resp) => return err_resp,
                     };
 
                     // Does the provided token have access to this log?
-                    if !token_has_access_to_log(&cfg, &access_token, &name) {
+                    if !token_has_access_to_log(cfg2, &access_token, &name) {
                         return Box::new(future::ok(return_401()));
                     }
-
+                    let cfg = Arc::clone(&cfg);
                     api_log_store(cfg, req, log_ingest_buffers)
                 }
             }
@@ -138,7 +140,7 @@ enum HeaderToken {
 
 /// Returns a `HeaderToken` with the details regarding the presence/validity of the auth token
 /// in the request.
-fn validate_token_from_header(cfg: &'static Config, req: &Request<Body>) -> HeaderToken {
+fn validate_token_from_header(cfg: &Config, req: &Request<Body>) -> HeaderToken {
     let access_key_result = match req.headers().get("MINSQL-TOKEN") {
         Some(val) => val.to_str(),
         None => return HeaderToken::NoToken,

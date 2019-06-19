@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
 use std::process;
-use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -56,21 +56,20 @@ pub fn run() {
         }
     };
 
-    // Validate all datastore for reachability
-    for (ds_name, ds) in cfg.datastore.iter() {
-        // if we find a bad datastore, for now let's panic
-        if storage::can_reach_datastore(&ds) == false {
-            error!("{} is not a reachable datastore", &ds_name);
-            process::exit(0x0100);
-        }
-    }
+    // to share t
+    let cfg = RwLock::new(cfg);
+    let cfg = Arc::new(cfg);
+
+    // make sure all datastores shown are reachable
+    let cfg_valid_ds = Arc::clone(&cfg);
+    validate_datastore_reachability(cfg_valid_ds);
 
     info!("Starting MinSQL Server");
     // initialize ingest buffers
     let mut log_ingest_buffers_map: HashMap<String, Mutex<IngestBuffer>> = HashMap::new();
 
     // for each log, initialize an ingest buffer
-    for (log_name, _) in &cfg.log {
+    for (log_name, _) in &cfg.read().unwrap().log {
         log_ingest_buffers_map.insert(log_name.clone(), Mutex::new(IngestBuffer::new()));
     }
 
@@ -79,32 +78,25 @@ pub fn run() {
     // create a referece to the hashmap that we will share across intervals below
     let ingest_buffer_interval = Arc::clone(&log_ingest_buffers);
 
-    let addr = cfg
-        .server
-        .as_ref()
-        .unwrap()
-        .address
-        .as_ref()
-        .unwrap()
-        .parse()
-        .unwrap();
+    let addr = cfg.read().unwrap().get_server_address().parse().unwrap();
 
-    let cfg = Box::new(cfg);
-    let cfg: &'static _ = Box::leak(cfg);
-
+    let cfg6 = Arc::clone(&cfg);
     // Hyper Service Function that will serve each request as a new task
     let new_service = move || {
         let log_ingest_buffers = Arc::clone(&log_ingest_buffers);
+        let cfg3 = Arc::clone(&cfg6);
         // Move a clone of `configuration` into the `service_fn`.
         service_fn(move |req| {
             let log_ingest_buffers = Arc::clone(&log_ingest_buffers);
-            http::request_router(req, &cfg, log_ingest_buffers)
+            let cfg3 = Arc::clone(&cfg3);
+            http::request_router(req, cfg3, log_ingest_buffers)
         })
     };
+    let read_cfg = cfg.read().unwrap();
 
-    let server_cfg = match &cfg.server {
+    let server_cfg = match &read_cfg.server {
         Some(s) => s,
-        None => panic!("No server configuration"),
+        None => panic!("No server configuration in your config.toml"),
     };
 
     match (&server_cfg.pkcs12_cert, &server_cfg.pkcs12_password) {
@@ -123,8 +115,9 @@ pub fn run() {
             let tls_cx = TlsAcceptor::builder(cert).build().unwrap();
             let tls_cx = tokio_tls::TlsAcceptor::from(tls_cx);
 
+            let cfg4 = Arc::clone(&cfg);
             hyper::rt::run(future::lazy(move || {
-                start_ingestion_flush_task(&cfg, ingest_buffer_interval);
+                start_ingestion_flush_task(cfg4, ingest_buffer_interval);
 
                 let srv = TcpListener::bind(&addr).expect("Error binding local port");
                 // Use lower lever hyper API to be able to intercept client connection
@@ -141,7 +134,7 @@ pub fn run() {
                     .then(|res| match res {
                         Ok(conn) => Ok(Some(conn)),
                         Err(e) => {
-                            eprintln!("Error: {}", e);
+                            eprintln!("Accept Connection Error: {}", e);
                             Ok(None)
                         }
                     })
@@ -163,8 +156,9 @@ pub fn run() {
         }
         (None, None) => {
             // HTTP server
+            let cfg7 = Arc::clone(&cfg);
             hyper::rt::run(future::lazy(move || {
-                start_ingestion_flush_task(&cfg, ingest_buffer_interval);
+                start_ingestion_flush_task(cfg7, ingest_buffer_interval);
 
                 let server = Server::bind(&addr)
                     .serve(new_service)
@@ -178,32 +172,46 @@ pub fn run() {
 }
 
 fn start_ingestion_flush_task(
-    cfg: &'static Config,
+    cfg: Arc<RwLock<Config>>,
     ingest_buffer: Arc<HashMap<String, Mutex<IngestBuffer>>>,
 ) {
+    let read_cfg = cfg.read().unwrap();
     // for each log, start an interval to flush data at window speed, as long as the
     // commit window is not 0
-    for (log_name, log) in &cfg.log {
+    for (log_name, log) in &read_cfg.log {
         let ingest_buffer2 = Arc::clone(&ingest_buffer);
+        let cfg2 = Arc::clone(&cfg);
         if log.commit_window != "0" {
             let log_name = log_name.clone();
             info!(
                 "Starting flusing loop for {} at {}",
                 &log_name, &log.commit_window
             );
-
             let task = Interval::new(
                 Instant::now(),
                 Duration::from_secs(Config::commit_window_to_seconds(&log.commit_window)),
             )
             .for_each(move |_| {
                 let ingest_buffer3 = Arc::clone(&ingest_buffer2);
+                let cfg3 = Arc::clone(&cfg2);
                 let log_name = log_name.clone();
-                flush_buffer(&log_name, &cfg, ingest_buffer3);
+                flush_buffer(&log_name, cfg3, ingest_buffer3);
                 Ok(())
             })
             .map_err(|e| panic!("interval errored; err={:?}", e));
             hyper::rt::spawn(task);
+        }
+    }
+}
+
+/// Validate all datastore for reachability
+fn validate_datastore_reachability(cfg: Arc<RwLock<Config>>) {
+    let read_cfg = cfg.read().unwrap();
+    for (ds_name, ds) in read_cfg.datastore.iter() {
+        // if we find a bad datastore, for now let's panic
+        if storage::can_reach_datastore(&ds) == false {
+            error!("{} is not a reachable datastore", &ds_name);
+            process::exit(0x0100);
         }
     }
 }

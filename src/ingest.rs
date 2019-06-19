@@ -15,8 +15,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::{Arc, RwLock};
 
 use futures::{future, Future, Stream};
 use hyper::header;
@@ -51,7 +51,7 @@ impl IngestBuffer {
 /// Flushes an `IngestBuffer` for a given `log_name`
 pub fn flush_buffer(
     log_name: &String,
-    cfg: &Config,
+    cfg: Arc<RwLock<Config>>,
     ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
 ) {
     let ingest_buffer = ingest_buffers.get(&log_name[..]).unwrap();
@@ -66,7 +66,7 @@ pub fn flush_buffer(
     if flushed_data.len() > 0 {
         // Write the data to object storage
         let payload = flushed_data.join("");
-        match write_to_datastore(&log_name, &cfg, &payload) {
+        match write_to_datastore(&log_name, cfg, &payload) {
             Ok(_) => (),
             Err(e) => {
                 error!("Problem flushing data out!! {:?}", e);
@@ -79,7 +79,7 @@ pub fn flush_buffer(
 
 // Handles a PUT operation to a log
 pub fn api_log_store(
-    cfg: &Config,
+    cfg: Arc<RwLock<Config>>,
     req: Request<Body>,
     log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
 ) -> ResponseFuture {
@@ -88,22 +88,23 @@ pub fn api_log_store(
         None => return Box::new(future::ok(return_404())),
     };
     // make a clone of the config for the closure
-    let cfg = cfg.clone();
+    let cfg2 = cfg.clone();
     Box::new(
         req.into_body()
             .concat2() // Concatenate all chunks in the body
             .from_err()
             .and_then(move |entire_body| {
+                let read_cfg = cfg.read().unwrap();
                 // Read the body from the request
                 let payload: String = match String::from_utf8(entire_body.to_vec()) {
                     Ok(str) => str,
                     Err(err) => panic!("Couldn't convert buffer to string: {}", err),
                 };
 
-                let log = cfg.get_log(&requested_log).unwrap();
+                let log = read_cfg.get_log(&requested_log).unwrap();
                 // if the commit window is 0s, commit immediately
                 if log.commit_window == "0" {
-                    match write_to_datastore(&requested_log, &cfg, &payload) {
+                    match write_to_datastore(&requested_log, cfg2, &payload) {
                         Ok(x) => x,
                         Err(e) => {
                             error!("{}", e);
@@ -133,8 +134,9 @@ pub fn api_log_store(
                     // if we are above storage threshold, we will flush the data
                     if total_bytes > 5 * 1024 * 1024 {
                         info!("Buffer above 5MB, flushing.");
+                        let cfg3 = Arc::clone(&cfg2);
                         hyper::rt::spawn({
-                            flush_buffer(&log_name, &cfg, log_ingest_buffers);
+                            flush_buffer(&log_name, cfg3, log_ingest_buffers);
                             futures::future::ok(())
                         });
                     }

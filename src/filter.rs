@@ -181,3 +181,22 @@ pub fn get_identifier_from_ast(ast: &ASTNode) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    #[test]
+    fn get_identifier_from_ast_node() {
+        let ast_node = ASTNode::SQLIdentifier("test_id".to_owned());
+        let identifier = get_identifier_from_ast(&ast_node);
+        assert_eq!(identifier, "test_id");
+    }
+
+    #[test]
+    fn invalid_identifier_from_ast_node() {
+        let ast_node = ASTNode::SQLWildcard;
+        let identifier = get_identifier_from_ast(&ast_node);
+        assert_eq!(identifier, "");
+    }
+}
