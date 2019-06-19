@@ -17,19 +17,24 @@
 use crate::config::Config;
 use std::sync::{Arc, RwLock};
 
-/// Checks the configuration hierarchy to validate if a token has access to a log
-pub fn token_has_access_to_log(
-    cfg: Arc<RwLock<Config>>,
-    access_token: &str,
-    log_name: &str,
-) -> bool {
-    let read_cfg = cfg.read().unwrap();
-    match read_cfg.auth.get(access_token) {
-        Some(val) => match val.get(log_name) {
-            Some(_) => return true,
+pub struct Auth {
+    config: Arc<RwLock<Config>>,
+}
+
+impl Auth {
+    pub fn new(cfg: Arc<RwLock<Config>>) -> Auth {
+        Auth { config: cfg }
+    }
+    /// Checks the configuration hierarchy to validate if a token has access to a log
+    pub fn token_has_access_to_log(&self, access_token: &str, log_name: &str) -> bool {
+        let cfg = self.config.read().unwrap();
+        match cfg.auth.get(access_token) {
+            Some(val) => match val.get(log_name) {
+                Some(_) => return true,
+                None => return false,
+            },
             None => return false,
-        },
-        None => return false,
+        }
     }
 }
 
@@ -37,7 +42,7 @@ pub fn token_has_access_to_log(
 mod auth_tests {
     use std::collections::HashMap;
 
-    use crate::config::LogAuth;
+    use crate::config::{Config, LogAuth};
 
     use super::*;
 
@@ -77,10 +82,11 @@ mod auth_tests {
 
     fn run_test_get_auth_config_for(test_case: TokenTestCase) {
         let cfg = get_auth_config_for(test_case.valid_token, test_case.valid_log_name);
-        let cfg = Box::new(cfg);
-        let cfg: &'static _ = Box::leak(cfg);
+        // override the config
+        let cfg = Arc::new(RwLock::new(cfg));
+        let auth_c = Auth::new(cfg);
 
-        let result = token_has_access_to_log(&cfg, &test_case.token[..], &test_case.log_name[..]);
+        let result = auth_c.token_has_access_to_log(&test_case.token[..], &test_case.log_name[..]);
 
         assert_eq!(result, test_case.expected);
     }

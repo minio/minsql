@@ -33,8 +33,7 @@ use tokio::net::TcpListener;
 use tokio::timer::Interval;
 
 use crate::config::Config;
-use crate::ingest::flush_buffer;
-use crate::ingest::IngestBuffer;
+use crate::ingest::{Ingest, IngestBuffer};
 
 mod auth;
 mod config;
@@ -46,172 +45,198 @@ mod ingest;
 mod query;
 mod storage;
 
-pub fn run() {
-    // Load the configuration file
-    let cfg = match config::load_configuration() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            error!("Failed to load configuration: {}", e);
-            process::exit(0x0100);
-        }
-    };
+pub struct Bootstrap {}
 
-    // to share t
-    let cfg = RwLock::new(cfg);
-    let cfg = Arc::new(cfg);
+impl Bootstrap {
+    pub fn load_config() {
+        // Load the configuration file
+        let parsed_cfg = match config::load_configuration() {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                error!("Failed to load configuration: {}", e);
+                process::exit(0x0100);
+            }
+        };
 
-    // make sure all datastores shown are reachable
-    let cfg_valid_ds = Arc::clone(&cfg);
-    validate_datastore_reachability(cfg_valid_ds);
-
-    info!("Starting MinSQL Server");
-    // initialize ingest buffers
-    let mut log_ingest_buffers_map: HashMap<String, Mutex<IngestBuffer>> = HashMap::new();
-
-    // for each log, initialize an ingest buffer
-    for (log_name, _) in &cfg.read().unwrap().log {
-        log_ingest_buffers_map.insert(log_name.clone(), Mutex::new(IngestBuffer::new()));
+        // Replace the singleton config with the parsed config
+        let main_cfg = config::get_config();
+        let mut internal_cfg = main_cfg.write().unwrap();
+        *internal_cfg = parsed_cfg;
+        drop(internal_cfg);
     }
 
-    let log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>> =
-        Arc::new(log_ingest_buffers_map);
-    // create a referece to the hashmap that we will share across intervals below
-    let ingest_buffer_interval = Arc::clone(&log_ingest_buffers);
+    pub fn get_cfg() -> Arc<RwLock<Config>> {
+        config::get_config()
+    }
+}
+
+pub struct MinSQL {
+    config: Arc<RwLock<Config>>,
+}
+
+impl MinSQL {
+    pub fn new(cfg: Arc<RwLock<Config>>) -> MinSQL {
+        MinSQL { config: cfg }
+    }
+
+    pub fn run(&self) {
+        // make sure all datastores shown are reachable
+        let cfg_valid_ds = config::get_config();
+        self.validate_datastore_reachability(cfg_valid_ds);
 
     let addr = cfg.read().unwrap().get_server_address().parse().unwrap();
 
-    let cfg6 = Arc::clone(&cfg);
-    // Hyper Service Function that will serve each request as a new task
-    let new_service = move || {
-        let log_ingest_buffers = Arc::clone(&log_ingest_buffers);
-        let cfg3 = Arc::clone(&cfg6);
-        // Move a clone of `configuration` into the `service_fn`.
-        service_fn(move |req| {
+        let cfg = config::get_config();
+
+        info!("Starting MinSQL Server");
+        // initialize ingest buffers
+        let mut log_ingest_buffers_map: HashMap<String, Mutex<IngestBuffer>> = HashMap::new();
+
+        // for each log, initialize an ingest buffer
+        for (log_name, _) in &cfg.read().unwrap().log {
+            log_ingest_buffers_map.insert(log_name.clone(), Mutex::new(IngestBuffer::new()));
+        }
+
+        let log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>> =
+            Arc::new(log_ingest_buffers_map);
+        // create a referece to the hashmap that we will share across intervals below
+        let ingest_buffer_interval = Arc::clone(&log_ingest_buffers);
+
+        let addr = cfg.read().unwrap().get_server_address().parse().unwrap();
+
+        // Hyper Service Function that will serve each request as a new task
+        let new_service = move || {
             let log_ingest_buffers = Arc::clone(&log_ingest_buffers);
-            let cfg3 = Arc::clone(&cfg3);
-            http::request_router(req, cfg3, log_ingest_buffers)
-        })
-    };
-    let read_cfg = cfg.read().unwrap();
-
-    let server_cfg = match &read_cfg.server {
-        Some(s) => s,
-        None => panic!("No server configuration in your config.toml"),
-    };
-
-    match (&server_cfg.pkcs12_cert, &server_cfg.pkcs12_password) {
-        (Some(pkcs12_cert), Some(pkcs12_pass)) => {
-            // HTTPS server
-            let mut der = Vec::new();
-
-            // Read cert file into der
-            File::open(&pkcs12_cert[..])
-                .expect("PKCS12 cert not found")
-                .read_to_end(&mut der)
-                .expect("Could not read file");
-
-            let cert = Identity::from_pkcs12(&der, &pkcs12_pass[..]).unwrap();
-
-            let tls_cx = TlsAcceptor::builder(cert).build().unwrap();
-            let tls_cx = tokio_tls::TlsAcceptor::from(tls_cx);
-
-            let cfg4 = Arc::clone(&cfg);
-            hyper::rt::run(future::lazy(move || {
-                start_ingestion_flush_task(cfg4, ingest_buffer_interval);
-
-                let srv = TcpListener::bind(&addr).expect("Error binding local port");
-                // Use lower lever hyper API to be able to intercept client connection
-                let http_proto = Http::new();
-                let server = http_proto
-                    .serve_incoming(
-                        srv.incoming().and_then(move |socket| {
-                            tls_cx
-                                .accept(socket)
-                                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
-                        }),
-                        new_service,
-                    )
-                    .then(|res| match res {
-                        Ok(conn) => Ok(Some(conn)),
-                        Err(e) => {
-                            eprintln!("Accept Connection Error: {}", e);
-                            Ok(None)
-                        }
-                    })
-                    .for_each(|conn_opt| {
-                        if let Some(conn) = conn_opt {
-                            hyper::rt::spawn(
-                                conn.and_then(|c| c.map_err(|e| panic!("Hyper error {}", e)))
-                                    .map_err(|e| eprintln!("Connection error {}", e)),
-                            );
-                        }
-
-                        Ok(())
-                    });
-
-                info!("Listening on https://{}", addr);
-
-                server
-            }));
-        }
-        (None, None) => {
-            // HTTP server
-            let cfg7 = Arc::clone(&cfg);
-            hyper::rt::run(future::lazy(move || {
-                start_ingestion_flush_task(cfg7, ingest_buffer_interval);
-
-                let server = Server::bind(&addr)
-                    .serve(new_service)
-                    .map_err(|e| eprintln!("server error: {}", e));
-                info!("Listening on http://{}", addr);
-                server
-            }));
-        }
-        _ => panic!("PKCS12 cert or password is missing"),
-    }
-}
-
-fn start_ingestion_flush_task(
-    cfg: Arc<RwLock<Config>>,
-    ingest_buffer: Arc<HashMap<String, Mutex<IngestBuffer>>>,
-) {
-    let read_cfg = cfg.read().unwrap();
-    // for each log, start an interval to flush data at window speed, as long as the
-    // commit window is not 0
-    for (log_name, log) in &read_cfg.log {
-        let ingest_buffer2 = Arc::clone(&ingest_buffer);
-        let cfg2 = Arc::clone(&cfg);
-        if log.commit_window != "0" {
-            let log_name = log_name.clone();
-            info!(
-                "Starting flusing loop for {} at {}",
-                &log_name, &log.commit_window
-            );
-            let task = Interval::new(
-                Instant::now(),
-                Duration::from_secs(Config::commit_window_to_seconds(&log.commit_window)),
-            )
-            .for_each(move |_| {
-                let ingest_buffer3 = Arc::clone(&ingest_buffer2);
-                let cfg3 = Arc::clone(&cfg2);
-                let log_name = log_name.clone();
-                flush_buffer(&log_name, cfg3, ingest_buffer3);
-                Ok(())
+            let http_c = http::Http::new(config::get_config());
+            // Move a clone of `configuration` into the `service_fn`.
+            service_fn(move |req| {
+                let log_ingest_buffers = Arc::clone(&log_ingest_buffers);
+                http_c.request_router(req, log_ingest_buffers)
             })
-            .map_err(|e| panic!("interval errored; err={:?}", e));
-            hyper::rt::spawn(task);
+        };
+        let read_cfg = cfg.read().unwrap();
+
+        let server_cfg = match &read_cfg.server {
+            Some(s) => s,
+            None => panic!("No server configuration in your config.toml"),
+        };
+
+        match (&server_cfg.pkcs12_cert, &server_cfg.pkcs12_password) {
+            (Some(pkcs12_cert), Some(pkcs12_pass)) => {
+                // HTTPS server
+                let mut der = Vec::new();
+
+                // Read cert file into der
+                File::open(&pkcs12_cert[..])
+                    .expect("PKCS12 cert not found")
+                    .read_to_end(&mut der)
+                    .expect("Could not read file");
+
+                let cert = Identity::from_pkcs12(&der, &pkcs12_pass[..]).unwrap();
+
+                let tls_cx = TlsAcceptor::builder(cert).build().unwrap();
+                let tls_cx = tokio_tls::TlsAcceptor::from(tls_cx);
+
+                // Instance responsable for flushing ingestion buffers
+                let minsql_c = MinSQL::new(Arc::clone(&self.config));
+
+                hyper::rt::run(future::lazy(move || {
+                    minsql_c.start_ingestion_flush_task(ingest_buffer_interval);
+
+                    let srv = TcpListener::bind(&addr).expect("Error binding local port");
+                    // Use lower lever hyper API to be able to intercept client connection
+                    let http_proto = Http::new();
+                    let server = http_proto
+                        .serve_incoming(
+                            srv.incoming().and_then(move |socket| {
+                                tls_cx
+                                    .accept(socket)
+                                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                            }),
+                            new_service,
+                        )
+                        .then(|res| match res {
+                            Ok(conn) => Ok(Some(conn)),
+                            Err(e) => {
+                                eprintln!("Accept Connection Error: {}", e);
+                                Ok(None)
+                            }
+                        })
+                        .for_each(|conn_opt| {
+                            if let Some(conn) = conn_opt {
+                                hyper::rt::spawn(
+                                    conn.and_then(|c| c.map_err(|e| panic!("Hyper error {}", e)))
+                                        .map_err(|e| eprintln!("Connection error {}", e)),
+                                );
+                            }
+
+                            Ok(())
+                        });
+
+                    info!("Listening on https://{}", addr);
+
+                    server
+                }));
+            }
+            (None, None) => {
+                // Instance responsable for flushing ingestion buffers
+                let minsql_c = MinSQL::new(Arc::clone(&self.config));
+                // HTTP server
+                hyper::rt::run(future::lazy(move || {
+                    minsql_c.start_ingestion_flush_task(ingest_buffer_interval);
+
+                    let server = Server::bind(&addr)
+                        .serve(new_service)
+                        .map_err(|e| eprintln!("server error: {}", e));
+                    info!("Listening on http://{}", addr);
+                    server
+                }));
+            }
+            _ => panic!("PKCS12 cert or password is missing"),
         }
     }
-}
+    fn start_ingestion_flush_task(&self, ingest_buffer: Arc<HashMap<String, Mutex<IngestBuffer>>>) {
+        let read_cfg = self.config.read().unwrap();
 
-/// Validate all datastore for reachability
-fn validate_datastore_reachability(cfg: Arc<RwLock<Config>>) {
-    let read_cfg = cfg.read().unwrap();
-    for (ds_name, ds) in read_cfg.datastore.iter() {
-        // if we find a bad datastore, for now let's panic
-        if storage::can_reach_datastore(&ds) == false {
-            error!("{} is not a reachable datastore", &ds_name);
-            process::exit(0x0100);
+        // for each log, start an interval to flush data at window speed, as long as the
+        // commit window is not 0
+        for (log_name, log) in &read_cfg.log {
+            let ingest_buffer2 = Arc::clone(&ingest_buffer);
+            if log.commit_window != "0" {
+                // What the flush spawn will take with him
+                let cfg = Arc::clone(&self.config);
+                let ingest_c = Ingest::new(cfg);
+
+                let log_name = log_name.clone();
+                info!(
+                    "Starting flusing loop for {} at {}",
+                    &log_name, &log.commit_window
+                );
+                let task = Interval::new(
+                    Instant::now(),
+                    Duration::from_secs(Config::commit_window_to_seconds(&log.commit_window)),
+                )
+                .for_each(move |_| {
+                    let ingest_buffer3 = Arc::clone(&ingest_buffer2);
+                    let log_name = log_name.clone();
+                    ingest_c.flush_buffer(&log_name, ingest_buffer3);
+                    Ok(())
+                })
+                .map_err(|e| panic!("interval errored; err={:?}", e));
+                hyper::rt::spawn(task);
+            }
+        }
+    }
+
+    /// Validate all datastore for reachability
+    fn validate_datastore_reachability(&self, cfg: Arc<RwLock<Config>>) {
+        let read_cfg = cfg.read().unwrap();
+        for (ds_name, ds) in read_cfg.datastore.iter() {
+            // if we find a bad datastore, for now let's panic
+            if storage::can_reach_datastore(&ds) == false {
+                error!("{} is not a reachable datastore", &ds_name);
+                process::exit(0x0100);
+            }
         }
     }
 }

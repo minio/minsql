@@ -15,15 +15,50 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::collections::HashMap;
-use std::env;
 use std::fmt;
 use std::fs;
+use std::sync::{Arc, Once, RwLock, ONCE_INIT};
+use std::{env, mem};
 
-use crate::constants::DEFAULT_SERVER_ADDRESS;
 use log::error;
 use serde_derive::{Deserialize, Serialize};
 
-//TODO: Remove serialize derive before commit
+use crate::constants::DEFAULT_SERVER_ADDRESS;
+
+/// Holds a single Configuration instance protected by a `RWLock`
+#[derive(Clone)]
+struct ConfigHolder {
+    // Since we will be used in many threads, we need to protect
+    // concurrent access
+    cfg: Arc<RwLock<Config>>,
+}
+/// Returns a reference to a the single protected configuration
+pub fn get_config() -> Arc<RwLock<Config>> {
+    // Initialize it to a null value
+    static mut SINGLETON: *const ConfigHolder = 0 as *const ConfigHolder;
+    static ONCE: Once = ONCE_INIT;
+
+    unsafe {
+        ONCE.call_once(|| {
+            // Make it
+            let singleton = ConfigHolder {
+                cfg: Arc::new(RwLock::new(Config {
+                    version: "".to_owned(),
+                    server: None,
+                    datastore: Default::default(),
+                    log: Default::default(),
+                    auth: Default::default(),
+                })),
+            };
+
+            // Put it in the heap so it can outlive this call
+            SINGLETON = mem::transmute(Box::new(singleton));
+        });
+
+        // Now we give out a counted reference of the data that is safe to use concurrently.
+        Arc::clone(&(*SINGLETON).cfg)
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -40,6 +75,10 @@ pub struct Config {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Server {
     pub address: Option<String>,
+    pub metadata_endpoint: String,
+    pub metadata_bucket: String,
+    pub access_key: String,
+    pub secret_key: String,
     pub pkcs12_cert: Option<String>,
     pub pkcs12_password: Option<String>,
 }

@@ -2,24 +2,17 @@ version = "1"
 
 [server]
    address = "0.0.0.0:9999"
+   # Bucket where MinSQL will store it's configuration
+   metadata_endpoint = "http://localhost:9000"
+   metadata_bucket = "metadata"
+   access_key = "minio"
+   secret_key = "minio123"
    # SSL can be turned on by providing a cert
    #pkcs12_cert = "certificate.pfx"
    #pkcs12_password = "password"
 
-# List as many minIO instances to store and retrieve the logs
-[datastore]
-[datastore.myminio]
-    endpoint = "http://localhost:9000"
-    access_key = "minio"
-    secret_key = "minio123"
-    bucket = "mindev"
-    prefix = ""
-
-# Define the logs that are available
-[log]
-[log.mylog]
-    name = "mylog"
-    # A log can be stored across multiple datastores
-    datastores = ["myminio"]
-    # How long should data be buffered on MinSQL before it's commited to MinIO
-    commit_window = "5s"
+[auth.TOKEN1.mylog]
+   token = "TOKEN1"
+   api = ["admin"]
+   expire = "duration"
+   status = "enabled"

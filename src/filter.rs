@@ -30,6 +30,7 @@ pub fn line_fails_query_conditions(
                 sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
                     let mut all_conditions_pass = true;
                     for slct in &bodyselect.selection {
+                        info!("ordered ops: {:?}", &slct);
                         match slct {
                             sqlparser::sqlast::ASTNode::SQLIsNotNull(ast) => {
                                 let identifier = get_identifier_from_ast(&ast);
@@ -149,13 +150,13 @@ pub fn line_fails_query_conditions(
                                             }
                                         }
                                     }
-                                    _ => {
-                                        info!("Unhandled operator");
+                                    xop => {
+                                        info!("Unhandled operator {:?}", xop);
                                     }
                                 }
                             }
-                            _ => {
-                                info!("Unhandled operation");
+                            x => {
+                                info!("Unhandled operation {:?}", x);
                             }
                         }
                     }
