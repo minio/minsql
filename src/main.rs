@@ -14,18 +14,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use minsql::{Bootstrap, MinSQL};
-use std::sync::Arc;
+use minsql::bootstrap;
 
 fn main() {
     pretty_env_logger::init();
 
-    // Load configuration
-    Bootstrap::load_config();
-    let sing_config = Bootstrap::get_cfg();
-    let cfg = Arc::clone(&sing_config);
-
-    // Start minSQL
-    let minsql_c = MinSQL::new(cfg);
-    minsql_c.run();
+    // Load configuration and start MinSQL
+    bootstrap();
 }

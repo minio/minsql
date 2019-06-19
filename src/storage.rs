@@ -36,8 +36,8 @@ use rusoto_s3::{
 };
 use uuid::Uuid;
 
-use crate::config;
 use crate::config::{Config, DataStore};
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug)]
 enum StorageError {
@@ -169,9 +169,12 @@ impl fmt::Display for WriteDatastoreError {
     }
 }
 
-pub fn write_to_datastore(log_name: &str, payload: &String) -> Result<bool, WriteDatastoreError> {
+pub fn write_to_datastore(
+    cfg: Arc<RwLock<Config>>,
+    log_name: &str,
+    payload: &String,
+) -> Result<bool, WriteDatastoreError> {
     let start = Instant::now();
-    let cfg = config::get_config();
     let read_cfg = cfg.read().unwrap();
     // Select a datastore at random to write to
     let datastore = rand_datastore(&read_cfg, &log_name).unwrap();

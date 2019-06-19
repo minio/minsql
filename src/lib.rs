@@ -47,27 +47,20 @@ mod storage;
 
 pub struct Bootstrap {}
 
-impl Bootstrap {
-    pub fn load_config() {
-        // Load the configuration file
-        let parsed_cfg = match config::load_configuration() {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                error!("Failed to load configuration: {}", e);
-                process::exit(0x0100);
-            }
-        };
+pub fn bootstrap() {
+    // Load the configuration file
+    let cfg = match config::load_configuration() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            error!("Failed to load configuration: {}", e);
+            process::exit(0x0100);
+        }
+    };
+    let cfg = Arc::new(RwLock::new(cfg));
 
-        // Replace the singleton config with the parsed config
-        let main_cfg = config::get_config();
-        let mut internal_cfg = main_cfg.write().unwrap();
-        *internal_cfg = parsed_cfg;
-        drop(internal_cfg);
-    }
-
-    pub fn get_cfg() -> Arc<RwLock<Config>> {
-        config::get_config()
-    }
+    // Start minSQL
+    let minsql_c = MinSQL::new(cfg);
+    minsql_c.run();
 }
 
 pub struct MinSQL {
@@ -81,19 +74,15 @@ impl MinSQL {
 
     pub fn run(&self) {
         // make sure all datastores shown are reachable
-        let cfg_valid_ds = config::get_config();
+        let cfg_valid_ds = Arc::clone(&self.config);
         self.validate_datastore_reachability(cfg_valid_ds);
-
-    let addr = cfg.read().unwrap().get_server_address().parse().unwrap();
-
-        let cfg = config::get_config();
 
         info!("Starting MinSQL Server");
         // initialize ingest buffers
         let mut log_ingest_buffers_map: HashMap<String, Mutex<IngestBuffer>> = HashMap::new();
 
         // for each log, initialize an ingest buffer
-        for (log_name, _) in &cfg.read().unwrap().log {
+        for (log_name, _) in &self.config.read().unwrap().log {
             log_ingest_buffers_map.insert(log_name.clone(), Mutex::new(IngestBuffer::new()));
         }
 
@@ -102,19 +91,28 @@ impl MinSQL {
         // create a referece to the hashmap that we will share across intervals below
         let ingest_buffer_interval = Arc::clone(&log_ingest_buffers);
 
-        let addr = cfg.read().unwrap().get_server_address().parse().unwrap();
+        let addr = self
+            .config
+            .read()
+            .unwrap()
+            .get_server_address()
+            .parse()
+            .unwrap();
 
+        let service_cfg = Arc::clone(&self.config);
         // Hyper Service Function that will serve each request as a new task
         let new_service = move || {
             let log_ingest_buffers = Arc::clone(&log_ingest_buffers);
-            let http_c = http::Http::new(config::get_config());
+            let inner_service_cfg = Arc::clone(&service_cfg);
+
+            let http_c = http::Http::new(inner_service_cfg);
             // Move a clone of `configuration` into the `service_fn`.
             service_fn(move |req| {
                 let log_ingest_buffers = Arc::clone(&log_ingest_buffers);
                 http_c.request_router(req, log_ingest_buffers)
             })
         };
-        let read_cfg = cfg.read().unwrap();
+        let read_cfg = self.config.read().unwrap();
 
         let server_cfg = match &read_cfg.server {
             Some(s) => s,

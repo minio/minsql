@@ -66,6 +66,8 @@ impl Ingest {
         let flush_cfg = Arc::clone(&self.config);
 
         // make a clone of the config for the closure
+        let cfg = Arc::clone(&self.config);
+        let ingest_c = Ingest::new(cfg);
         Box::new(
             req.into_body()
                 .concat2() // Concatenate all chunks in the body
@@ -80,7 +82,8 @@ impl Ingest {
                     let log = cfg.get_log(&requested_log).unwrap();
                     // if the commit window is 0s, commit immediately
                     if log.commit_window == "0" {
-                        match write_to_datastore(&requested_log, &payload) {
+                        let cfg = Arc::clone(&ingest_c.config);
+                        match write_to_datastore(cfg, &requested_log, &payload) {
                             Ok(x) => x,
                             Err(e) => {
                                 error!("{}", e);
@@ -146,7 +149,8 @@ impl Ingest {
         if flushed_data.len() > 0 {
             // Write the data to object storage
             let payload = flushed_data.join("");
-            match write_to_datastore(&log_name, &payload) {
+            let cfg = Arc::clone(&self.config);
+            match write_to_datastore(cfg, &log_name, &payload) {
                 Ok(_) => (),
                 Err(e) => {
                     error!("Problem flushing data out!! {:?}", e);
