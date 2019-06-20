@@ -121,11 +121,10 @@ impl Meta {
                                     })
                                     .map(move |bytes| {
                                         let result = String::from_utf8(bytes).unwrap();
-                                        let key: String = file_key_clone
-                                            .chars()
-                                            .skip("minsql/meta/".len())
+                                        let parts: Vec<&str> = file_key_clone
+                                            .trim_start_matches("minsql/meta/")
+                                            .split("/")
                                             .collect();
-                                        let parts: Vec<&str> = key.split("/").collect();
                                         let meta_obj = match (parts.len(), parts[0]) {
                                             (2, "logs") => match serde_json::from_str(&result) {
                                                 Ok(t) => MetaConfigObject::Log(t),
