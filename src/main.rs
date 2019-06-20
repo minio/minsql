@@ -14,9 +14,11 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use minsql::bootstrap;
+
 fn main() {
     pretty_env_logger::init();
 
-    // Start minSQL
-    minsql::run();
+    // Load configuration and start MinSQL
+    bootstrap();
 }

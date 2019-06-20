@@ -14,28 +14,35 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use log::error;
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::fs;
 
+use log::error;
 use serde_derive::{Deserialize, Serialize};
 
-//TODO: Remove serialize derive before commit
+use crate::constants::DEFAULT_SERVER_ADDRESS;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub version: String,
     pub server: Option<Server>,
+    #[serde(default = "HashMap::new")]
     pub datastore: HashMap<String, DataStore>,
+    #[serde(default = "HashMap::new")]
     pub log: HashMap<String, Log>,
+    #[serde(default = "HashMap::new")]
     pub auth: HashMap<String, HashMap<String, LogAuth>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Server {
     pub address: Option<String>,
+    pub metadata_endpoint: String,
+    pub metadata_bucket: String,
+    pub access_key: String,
+    pub secret_key: String,
     pub pkcs12_cert: Option<String>,
     pub pkcs12_password: Option<String>,
 }
@@ -69,9 +76,9 @@ impl Config {
     pub fn get_log(&self, logname: &String) -> Option<&Log> {
         self.log.get(&logname[..])
     }
-    // Translates a string duration to an unsigned integer
-    // for example, "5s" returns 5
-    // "10m" returns 600
+    /// Translates a string duration to an unsigned integer
+    /// for example, "5s" returns 5
+    /// "10m" returns 600
     pub fn commit_window_to_seconds(commit_window: &String) -> u64 {
         let last_character = &commit_window[commit_window.len() - 1..commit_window.len()];
         match last_character {
@@ -98,6 +105,18 @@ impl Config {
                 seconds
             }
             _ => 0 as u64,
+        }
+    }
+
+    /// Returns the server address to bind, if no configuration is found it returns the default
+    /// address of 0.0.0.0:9999
+    pub fn get_server_address(&self) -> String {
+        match &self.server {
+            Some(server) => match &server.address {
+                Some(address) => address.clone(),
+                None => DEFAULT_SERVER_ADDRESS.to_owned(),
+            },
+            None => DEFAULT_SERVER_ADDRESS.to_owned(),
         }
     }
 }

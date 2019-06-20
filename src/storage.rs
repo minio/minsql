@@ -37,6 +37,7 @@ use rusoto_s3::{
 use uuid::Uuid;
 
 use crate::config::{Config, DataStore};
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug)]
 enum StorageError {
@@ -102,7 +103,7 @@ impl ProvideAwsCredentials for CustomCredentialsProvider {
     }
 }
 
-fn client_for_datastore(datastore: &DataStore) -> S3Client {
+pub fn client_for_datastore(datastore: &DataStore) -> S3Client {
     // Create a credentials holder, for our provider to provide into the s3 client
     let credentials = AwsCredentials::new(
         &datastore.access_key[..],
@@ -169,13 +170,14 @@ impl fmt::Display for WriteDatastoreError {
 }
 
 pub fn write_to_datastore(
+    cfg: Arc<RwLock<Config>>,
     log_name: &str,
-    cfg: &Config,
     payload: &String,
 ) -> Result<bool, WriteDatastoreError> {
     let start = Instant::now();
+    let read_cfg = cfg.read().unwrap();
     // Select a datastore at random to write to
-    let datastore = rand_datastore(&cfg, &log_name).unwrap();
+    let datastore = rand_datastore(&read_cfg, &log_name).unwrap();
     // Get the Object Storage client
     let s3_client = client_for_datastore(&datastore);
     let now = Utc::now();
@@ -193,6 +195,7 @@ pub fn write_to_datastore(
     // turn the payload into a streaming body
     let strbody = str_to_streaming_body(payload.clone());
     // save the payload
+    // TODO: Make this function return a stream so we can switch to an async response and not block
     let save_res = s3_client
         .put_object(PutObjectRequest {
             bucket: datastore.bucket.clone(),
@@ -236,6 +239,7 @@ pub fn list_msl_bucket_files(
     datastore: &DataStore,
 ) -> Result<Vec<String>, ListMslFilesError> {
     let s3_client = client_for_datastore(datastore);
+    // TODO: Make this function return a stream so we can switch to an async response and not block
     let objects_res = s3_client
         .list_objects(ListObjectsRequest {
             bucket: datastore.bucket.clone(),

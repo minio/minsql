@@ -30,6 +30,7 @@ pub fn line_fails_query_conditions(
                 sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
                     let mut all_conditions_pass = true;
                     for slct in &bodyselect.selection {
+                        info!("ordered ops: {:?}", &slct);
                         match slct {
                             sqlparser::sqlast::ASTNode::SQLIsNotNull(ast) => {
                                 let identifier = get_identifier_from_ast(&ast);
@@ -149,13 +150,13 @@ pub fn line_fails_query_conditions(
                                             }
                                         }
                                     }
-                                    _ => {
-                                        info!("Unhandled operator");
+                                    xop => {
+                                        info!("Unhandled operator {:?}", xop);
                                     }
                                 }
                             }
-                            _ => {
-                                info!("Unhandled operation");
+                            x => {
+                                info!("Unhandled operation {:?}", x);
                             }
                         }
                     }
@@ -179,5 +180,24 @@ pub fn get_identifier_from_ast(ast: &ASTNode) -> String {
             // TODO: Should we be retunring anything at all?
             "".to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    #[test]
+    fn get_identifier_from_ast_node() {
+        let ast_node = ASTNode::SQLIdentifier("test_id".to_owned());
+        let identifier = get_identifier_from_ast(&ast_node);
+        assert_eq!(identifier, "test_id");
+    }
+
+    #[test]
+    fn invalid_identifier_from_ast_node() {
+        let ast_node = ASTNode::SQLWildcard;
+        let identifier = get_identifier_from_ast(&ast_node);
+        assert_eq!(identifier, "");
     }
 }
