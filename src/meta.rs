@@ -96,7 +96,6 @@ impl Meta {
                 // For each objects, get_object, filter out system files
                 stream::iter_ok(objects)
                     .map(|file_object| file_object.clone().key.unwrap())
-                    .filter(|file_key| file_key.ends_with(".DS_Store") == false)
                     .and_then(move |file_key| {
                         let file_key_clone = file_key.clone();
                         s3_client2
