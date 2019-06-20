@@ -30,9 +30,7 @@ use rusoto_core::RusotoError;
 use rusoto_credential::AwsCredentials;
 use rusoto_credential::CredentialsError;
 use rusoto_credential::ProvideAwsCredentials;
-use rusoto_s3::{
-    GetObjectError, GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3Client, S3,
-};
+use rusoto_s3::{GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3Client, S3};
 use tokio_codec::{FramedRead, LinesCodec};
 use tokio_io::AsyncRead;
 use uuid::Uuid;
