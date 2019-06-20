@@ -166,56 +166,6 @@ impl Query {
         None
     }
 
-    pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> {
-        // Compile the regex only once
-        lazy_static! {
-            static ref IP_RE :Regex= Regex::new(r"(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))").unwrap();
-            static ref EMAIL_RE :Regex= Regex::new(r"([\w\.!#$%&'*+\-=?\^_`{|}~]+@([\w\d-]+\.)+[\w]{2,4})").unwrap();
-            // TODO: This regex matches a fairly simple date format, improve : 2019-05-23
-            static ref DATE_RE :Regex= Regex::new(r"((19[789]\d|2\d{3})[-/](0[1-9]|1[1-2])[-/](0[1-9]|[1-2][0-9]|3[0-1]*))|((0[1-9]|[1-2][0-9]|3[0-1]*)[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|(0[1-9]|1[1-2]))[-/](19[789]\d|2\d{3}))").unwrap();
-            static ref QUOTED_RE :Regex= Regex::new("((\"(.*?)\")|'(.*?)')").unwrap();
-            static ref URL_RE :Regex= Regex::new(r#"(https?|ftp)://[^\s/$.?#].[^()\]\[\s]*"#).unwrap();
-        }
-        let mut results: HashMap<String, Vec<String>> = HashMap::new();
-
-        if flags.contains(ScanFlags::IP) {
-            let mut items: Vec<String> = Vec::new();
-            for cap in IP_RE.captures_iter(text) {
-                items.push(cap[0].to_string())
-            }
-            results.insert(SF_IP.to_string(), items);
-        }
-        if flags.contains(ScanFlags::EMAIL) {
-            let mut items: Vec<String> = Vec::new();
-            for cap in EMAIL_RE.captures_iter(text) {
-                items.push(cap[0].to_string())
-            }
-            results.insert(SF_EMAIL.to_string(), items);
-        }
-        if flags.contains(ScanFlags::DATE) {
-            let mut items: Vec<String> = Vec::new();
-            for cap in DATE_RE.captures_iter(text) {
-                items.push(cap[0].to_string())
-            }
-            results.insert(SF_DATE.to_string(), items);
-        }
-        if flags.contains(ScanFlags::QUOTED) {
-            let mut items: Vec<String> = Vec::new();
-            for cap in QUOTED_RE.captures_iter(text) {
-                items.push(cap[0].to_string())
-            }
-            results.insert(SF_QUOTED.to_string(), items);
-        }
-        if flags.contains(ScanFlags::URL) {
-            let mut items: Vec<String> = Vec::new();
-            for cap in URL_RE.captures_iter(text) {
-                items.push(cap[0].to_string())
-            }
-            results.insert(SF_URL.to_string(), items);
-        }
-        results
-    }
-
     // performs a query on a log
     pub fn api_log_search(&self, req: Request<Body>, access_token: &String) -> ResponseFuture {
         let start = Instant::now();
@@ -350,95 +300,15 @@ impl Query {
                                         stream::iter_ok(individual_lines)
                                             .take(max_tak.unwrap())
                                             .fold(tx, move |tx, line| {
-                                                let mut projection_values: HashMap<String, String> =
-                                                    HashMap::new();
                                                 let query_data = queries_parse
                                                     .get(&query.to_string()[..])
                                                     .unwrap();
-                                                // if we have position columns, process
-                                                if query_data.positional_fields.len() > 0 {
-                                                    // TODO: Use separator construct from header
-                                                    let parts: Vec<&str> =
-                                                        line.split(" ").collect();
-                                                    for pos in &query_data.positional_fields {
-                                                        if pos.position - 1 < (parts.len() as i32) {
-                                                            projection_values.insert(
-                                                                pos.alias.clone(),
-                                                                parts[(pos.position - 1) as usize]
-                                                                    .to_string(),
-                                                            );
-                                                        } else {
-                                                            projection_values.insert(
-                                                                pos.alias.clone(),
-                                                                "".to_string(),
-                                                            );
-                                                        }
-                                                    }
-                                                }
 
-                                                if query_data.smart_fields.len() > 0 {
-                                                    let found_vals = Query::scanlog(
-                                                        &line.to_string(),
-                                                        query_data.scan_flags,
-                                                    );
-                                                    for smt in &query_data.smart_fields {
-                                                        if found_vals.contains_key(&smt.typed[..]) {
-                                                            // if the requested position is available
-                                                            if smt.position - 1
-                                                                < (found_vals[&smt.typed].len()
-                                                                    as i32)
-                                                            {
-                                                                projection_values.insert(
-                                                                    smt.alias.clone(),
-                                                                    found_vals[&smt.typed][(smt
-                                                                        .position
-                                                                        - 1)
-                                                                        as usize]
-                                                                        .clone(),
-                                                                );
-                                                            } else {
-                                                                projection_values.insert(
-                                                                    smt.alias.clone(),
-                                                                    "".to_string(),
-                                                                );
-                                                            }
-                                                        }
-                                                    }
-                                                }
+                                                let outline = evaluate_query_on_line(
+                                                    &query, query_data, line,
+                                                )
+                                                .unwrap_or("".to_string());
 
-                                                // filter the line
-                                                let skip_line = line_fails_query_conditions(
-                                                    &line,
-                                                    &query,
-                                                    &projection_values,
-                                                );
-
-                                                let mut outline: String = String::new();
-
-                                                if skip_line == false {
-                                                    if query_data.read_all {
-                                                        outline = line.clone();
-                                                        outline.push('\n');
-                                                    } else {
-                                                        // build the result
-                                                        // iterate over the ordered resulting projections
-                                                        let mut field_values: Vec<String> =
-                                                            Vec::new();
-                                                        for proj in &query_data.projections_ordered
-                                                        {
-                                                            // check if it's in positionsals
-                                                            if projection_values.contains_key(proj)
-                                                            {
-                                                                field_values.push(
-                                                                    projection_values[proj].clone(),
-                                                                );
-                                                            }
-                                                        }
-                                                        // TODO: When adding CSV output, change the separator
-                                                        outline = field_values.join(" ");
-                                                        outline.push('\n');
-                                                    }
-                                                }
                                                 // increase line counter
                                                 let mut protected_data = max_lines.lock().unwrap();
                                                 let data = *protected_data;
@@ -815,6 +685,146 @@ impl Query {
         ast.iter()
             .map(|q| self.process_statement(&access_token, &q))
             .collect()
+    }
+}
+
+pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> {
+    // Compile the regex only once
+    lazy_static! {
+        static ref IP_RE :Regex= Regex::new(r"(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))").unwrap();
+        static ref EMAIL_RE :Regex= Regex::new(r"([\w\.!#$%&'*+\-=?\^_`{|}~]+@([\w\d-]+\.)+[\w]{2,4})").unwrap();
+        // TODO: This regex matches a fairly simple date format, improve : 2019-05-23
+        static ref DATE_RE :Regex= Regex::new(r"((19[789]\d|2\d{3})[-/](0[1-9]|1[1-2])[-/](0[1-9]|[1-2][0-9]|3[0-1]*))|((0[1-9]|[1-2][0-9]|3[0-1]*)[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|(0[1-9]|1[1-2]))[-/](19[789]\d|2\d{3}))").unwrap();
+        static ref QUOTED_RE :Regex= Regex::new("((\"(.*?)\")|'(.*?)')").unwrap();
+        static ref URL_RE :Regex= Regex::new(r#"(https?|ftp)://[^\s/$.?#].[^()\]\[\s]*"#).unwrap();
+    }
+    let mut results: HashMap<String, Vec<String>> = HashMap::new();
+
+    if flags.contains(ScanFlags::IP) {
+        let mut items: Vec<String> = Vec::new();
+        for cap in IP_RE.captures_iter(text) {
+            items.push(cap[0].to_string())
+        }
+        results.insert(SF_IP.to_string(), items);
+    }
+    if flags.contains(ScanFlags::EMAIL) {
+        let mut items: Vec<String> = Vec::new();
+        for cap in EMAIL_RE.captures_iter(text) {
+            items.push(cap[0].to_string())
+        }
+        results.insert(SF_EMAIL.to_string(), items);
+    }
+    if flags.contains(ScanFlags::DATE) {
+        let mut items: Vec<String> = Vec::new();
+        for cap in DATE_RE.captures_iter(text) {
+            items.push(cap[0].to_string())
+        }
+        results.insert(SF_DATE.to_string(), items);
+    }
+    if flags.contains(ScanFlags::QUOTED) {
+        let mut items: Vec<String> = Vec::new();
+        for cap in QUOTED_RE.captures_iter(text) {
+            items.push(cap[0].to_string())
+        }
+        results.insert(SF_QUOTED.to_string(), items);
+    }
+    if flags.contains(ScanFlags::URL) {
+        let mut items: Vec<String> = Vec::new();
+        for cap in URL_RE.captures_iter(text) {
+            items.push(cap[0].to_string())
+        }
+        results.insert(SF_URL.to_string(), items);
+    }
+    results
+}
+
+fn extract_positional_fields(
+    projection_values: &mut HashMap<String, String>,
+    query_data: &QueryParsing,
+    line: String,
+) {
+    if query_data.positional_fields.len() > 0 {
+        // TODO: Use separator construct from header
+        let parts: Vec<&str> = line.split(" ").collect();
+        for pos in &query_data.positional_fields {
+            let key = pos.alias.clone();
+            if pos.position - 1 < (parts.len() as i32) {
+                projection_values.insert(key, parts[(pos.position - 1) as usize].to_string());
+            } else {
+                projection_values.insert(key, "".to_string());
+            }
+        }
+    }
+}
+
+fn extract_smart_fields(
+    projection_values: &mut HashMap<String, String>,
+    query_data: &QueryParsing,
+    line: String,
+) {
+    if query_data.smart_fields.len() > 0 {
+        let found_vals = scanlog(&line.to_string(), query_data.scan_flags);
+        for smt in &query_data.smart_fields {
+            if found_vals.contains_key(&smt.typed[..]) {
+                // if the requested position is available
+                let key = smt.alias.clone();
+                if smt.position - 1 < (found_vals[&smt.typed].len() as i32) {
+                    projection_values.insert(
+                        key,
+                        found_vals[&smt.typed][(smt.position - 1) as usize].clone(),
+                    );
+                } else {
+                    projection_values.insert(key, "".to_string());
+                }
+            }
+        }
+    }
+}
+
+fn mk_output_line(
+    projection_values: &HashMap<String, String>,
+    query_data: &QueryParsing,
+    line: String,
+) -> String {
+    if query_data.read_all {
+        line + &"\n"
+    } else {
+        // build the result iterate over the ordered resulting
+        // projections
+        let field_values: Vec<String> = query_data
+            .projections_ordered
+            .iter()
+            .map(|x| x.clone())
+            .filter(|proj| {
+                // check if it's in positionals
+                projection_values.contains_key(proj)
+            })
+            .map(|proj| projection_values[&proj].clone())
+            .collect();
+
+        // TODO: When adding CSV output, change the separator
+        field_values.join(" ") + &"\n"
+    }
+}
+
+fn evaluate_query_on_line(
+    query: &SQLStatement,
+    query_data: &QueryParsing,
+    line: String,
+) -> Option<String> {
+    let mut projection_values: HashMap<String, String> = HashMap::new();
+
+    extract_positional_fields(&mut projection_values, query_data, line.clone());
+
+    extract_smart_fields(&mut projection_values, query_data, line.clone());
+
+    // filter the line
+    let skip_line = line_fails_query_conditions(&line, &query, &projection_values);
+
+    if skip_line {
+        Some(mk_output_line(&projection_values, query_data, line.clone()))
+    } else {
+        None
     }
 }
 
