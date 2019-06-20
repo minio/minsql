@@ -57,7 +57,7 @@ pub struct DataStore {
     pub prefix: String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Log {
     pub name: Option<String>,
     pub datastores: Vec<String>,
