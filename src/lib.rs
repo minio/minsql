@@ -33,7 +33,7 @@ use hyper::Server;
 use log::{error, info};
 use native_tls::{Identity, TlsAcceptor};
 use tokio::net::TcpListener;
-use tokio::timer::{Delay, Interval};
+use tokio::timer::Interval;
 
 use crate::config::Config;
 use crate::ingest::{Ingest, IngestBuffer};
@@ -85,19 +85,8 @@ impl MinSQL {
         let meta_cfg = Arc::clone(&self.config);
         // initial load of configuraiton
         tokio::run(future::lazy(|| {
-            println!("running future");
             let meta_c = Meta::new(meta_cfg);
-            meta_c.load_config_from_metabucket();
-
-            let when = Instant::now() + Duration::from_millis(100);
-            let task = Delay::new(when)
-                .and_then(|_| {
-                    println!("Hello world!");
-                    Ok(())
-                })
-                .map_err(|e| panic!("delay errored; err={:?}", e));
-
-            task
+            meta_c.load_config_from_metabucket()
         }));
 
         info!("Starting MinSQL Server");
