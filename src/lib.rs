@@ -13,6 +13,9 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#[allow(unused)]
+#[macro_use]
+extern crate bitflags;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -30,10 +33,11 @@ use hyper::Server;
 use log::{error, info};
 use native_tls::{Identity, TlsAcceptor};
 use tokio::net::TcpListener;
-use tokio::timer::Interval;
+use tokio::timer::{Delay, Interval};
 
 use crate::config::Config;
 use crate::ingest::{Ingest, IngestBuffer};
+use crate::meta::Meta;
 
 mod auth;
 mod config;
@@ -42,6 +46,7 @@ mod dialect;
 mod filter;
 mod http;
 mod ingest;
+mod meta;
 mod query;
 mod storage;
 
@@ -76,6 +81,24 @@ impl MinSQL {
         // make sure all datastores shown are reachable
         let cfg_valid_ds = Arc::clone(&self.config);
         self.validate_datastore_reachability(cfg_valid_ds);
+
+        let meta_cfg = Arc::clone(&self.config);
+        // initial load of configuraiton
+        tokio::run(future::lazy(|| {
+            println!("running future");
+            let meta_c = Meta::new(meta_cfg);
+            meta_c.load_config_from_metabucket();
+
+            let when = Instant::now() + Duration::from_millis(100);
+            let task = Delay::new(when)
+                .and_then(|_| {
+                    println!("Hello world!");
+                    Ok(())
+                })
+                .map_err(|e| panic!("delay errored; err={:?}", e));
+
+            task
+        }));
 
         info!("Starting MinSQL Server");
         // initialize ingest buffers
