@@ -23,7 +23,7 @@ use futures::future::FutureResult;
 use futures::stream::Stream;
 use futures::Future;
 use futures::Poll;
-use log::info;
+use log::error;
 use rand::distributions::{IndependentSample, Range};
 use rusoto_core::HttpClient;
 use rusoto_core::Region;
@@ -32,7 +32,8 @@ use rusoto_credential::AwsCredentials;
 use rusoto_credential::CredentialsError;
 use rusoto_credential::ProvideAwsCredentials;
 use rusoto_s3::{
-    GetObjectError, GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3Client, S3,
+    GetObjectError, GetObjectRequest, ListObjectsError, ListObjectsRequest, PutObjectRequest,
+    S3Client, S3,
 };
 use uuid::Uuid;
 
@@ -124,8 +125,13 @@ pub fn client_for_datastore(datastore: &DataStore) -> S3Client {
     S3Client::new_with(dispatcher, provider, region)
 }
 
-// <p>Function used to verify if a datastore is valid in terms of reachability</p>
-pub fn can_reach_datastore(datastore: &DataStore) -> bool {
+pub enum ReachableDatastoreError {
+    NoSuchBucket(String),
+    Unknown,
+}
+
+/// <p>Function used to verify if a datastore is valid in terms of reachability</p>
+pub fn can_reach_datastore(datastore: &DataStore) -> Result<bool, ReachableDatastoreError> {
     // Get the Object Storage client
     let s3_client = client_for_datastore(&datastore);
     // perform list call to verify we have access
@@ -141,11 +147,16 @@ pub fn can_reach_datastore(datastore: &DataStore) -> bool {
         })
         .sync()
         .map_err(|e| {
-            info!("Cannot access bucket: {}", e);
-            e
+            error!("Cannot access bucket: {}", e);
+            match e {
+                RusotoError::Service(se) => match se {
+                    ListObjectsError::NoSuchBucket(s) => ReachableDatastoreError::NoSuchBucket(s),
+                },
+                _ => ReachableDatastoreError::Unknown,
+            }
         })
-        .map(|_| true)
-        .unwrap_or(false)
+        .map(|_| Ok(true))
+        .unwrap_or(Ok(false))
 }
 
 fn str_to_streaming_body(s: String) -> rusoto_s3::StreamingBody {

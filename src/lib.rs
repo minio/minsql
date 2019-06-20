@@ -240,9 +240,22 @@ impl MinSQL {
         let read_cfg = cfg.read().unwrap();
         for (ds_name, ds) in read_cfg.datastore.iter() {
             // if we find a bad datastore, for now let's panic
-            if storage::can_reach_datastore(&ds) == false {
-                error!("{} is not a reachable datastore", &ds_name);
-                process::exit(0x0100);
+            match storage::can_reach_datastore(&ds) {
+                Ok(true) => (),
+                Ok(false) => {
+                    println!("{} datastore is not reachable", ds_name);
+                    process::exit(0x0100);
+                }
+                Err(e) => match e {
+                    storage::ReachableDatastoreError::NoSuchBucket(s) => {
+                        println!("On {} there is no such bucket: {:?}", ds_name, s);
+                        process::exit(0x0100);
+                    }
+                    _ => {
+                        println!("{} is not reachable", ds_name);
+                        process::exit(0x0100);
+                    }
+                },
             }
         }
     }
