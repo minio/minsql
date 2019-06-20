@@ -247,12 +247,12 @@ impl MinSQL {
                     process::exit(0x0100);
                 }
                 Err(e) => match e {
-                    storage::StorageError::Operation(ope) => match ope {
-                        storage::ReachableDatastoreError::NoSuchBucket(s) => {
-                            println!("On {} there is no such bucket: {:?}", ds_name, s);
-                            process::exit(0x0100);
-                        }
-                    },
+                    storage::StorageError::Operation(
+                        storage::ReachableDatastoreError::NoSuchBucket(s),
+                    ) => {
+                        println!("On {} there is no such bucket: {:?}", ds_name, s);
+                        process::exit(0x0100);
+                    }
                     _ => {
                         println!("{} is not reachable", ds_name);
                         process::exit(0x0100);
