@@ -34,6 +34,7 @@ use tokio::timer::Interval;
 
 use crate::config::Config;
 use crate::ingest::{Ingest, IngestBuffer};
+use crate::meta::Meta;
 
 mod auth;
 mod config;
@@ -42,6 +43,7 @@ mod dialect;
 mod filter;
 mod http;
 mod ingest;
+mod meta;
 mod query;
 mod storage;
 
@@ -76,6 +78,13 @@ impl MinSQL {
         // make sure all datastores shown are reachable
         let cfg_valid_ds = Arc::clone(&self.config);
         self.validate_datastore_reachability(cfg_valid_ds);
+
+        let meta_cfg = Arc::clone(&self.config);
+        // initial load of configuraiton
+        tokio::run(future::lazy(|| {
+            let meta_c = Meta::new(meta_cfg);
+            meta_c.load_config_from_metabucket()
+        }));
 
         info!("Starting MinSQL Server");
         // initialize ingest buffers
@@ -231,9 +240,24 @@ impl MinSQL {
         let read_cfg = cfg.read().unwrap();
         for (ds_name, ds) in read_cfg.datastore.iter() {
             // if we find a bad datastore, for now let's panic
-            if storage::can_reach_datastore(&ds) == false {
-                error!("{} is not a reachable datastore", &ds_name);
-                process::exit(0x0100);
+            match storage::can_reach_datastore(&ds) {
+                Ok(true) => (),
+                Ok(false) => {
+                    println!("{} datastore is not reachable", ds_name);
+                    process::exit(0x0100);
+                }
+                Err(e) => match e {
+                    storage::StorageError::Operation(
+                        storage::ReachableDatastoreError::NoSuchBucket(s),
+                    ) => {
+                        println!("On {} there is no such bucket: {:?}", ds_name, s);
+                        process::exit(0x0100);
+                    }
+                    _ => {
+                        println!("{} is not reachable", ds_name);
+                        process::exit(0x0100);
+                    }
+                },
             }
         }
     }
