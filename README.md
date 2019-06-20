@@ -21,6 +21,19 @@ To run the project you may specify a `.toml` configuration file, if none is spec
 ```
 A sample configuration file can be found at `config.toml.template`
 
+### Meta Bucket
+
+A bucket to store shared configuration across multiple `MinSQL` instances is needed, the location and access to it should be configured on the `config.toml`.
+
+````toml
+[server]
+   ...
+   metadata_bucket = "meta"
+   metadata_endpoint = "http://localhost:9000"
+   access_key = "minio"
+   secret_key = "minio123"
+````
+
 # Storing logs
 For a log `mylog` defined on the `config.toml` we can store logs on *MinSQL* by performing a `PUT` to your `MinSQL` instance
 
