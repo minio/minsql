@@ -35,7 +35,7 @@ impl Meta {
         Meta { config: cfg }
     }
 
-    /// Scans the metabucket for configuration files and loads them into the shard state `Config`
+    /// Scans the metabucket for configuration files and loads them into the shared state `Config`
     pub fn load_config_from_metabucket(&self) -> impl Future<Item = (), Error = ()> {
         let read_cfg = self.config.read().unwrap();
         let server_cfg = match &read_cfg.server {
