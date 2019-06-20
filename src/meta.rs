@@ -151,8 +151,6 @@ impl Meta {
                 }
             })
             .map(|_| ());
-
-        //        tokio::spawn(task);
         task
     }
 }
