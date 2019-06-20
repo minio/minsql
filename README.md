@@ -28,7 +28,7 @@ A bucket to store shared configuration across multiple `MinSQL` instances is nee
 ````toml
 [server]
    ...
-   metadata_bucket = "meta"
+   metadata_bucket = "minsql-meta"
    metadata_endpoint = "http://localhost:9000"
    access_key = "minio"
    secret_key = "minio123"
