@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::io::Error as IoError;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use chrono::{Datelike, Timelike, Utc};
@@ -31,41 +31,31 @@ use rusoto_core::RusotoError;
 use rusoto_credential::AwsCredentials;
 use rusoto_credential::CredentialsError;
 use rusoto_credential::ProvideAwsCredentials;
-use rusoto_s3::{
-    GetObjectError, GetObjectRequest, ListObjectsError, ListObjectsRequest, PutObjectRequest,
-    S3Client, S3,
-};
+use rusoto_s3::{GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3Client, S3};
 use uuid::Uuid;
 
 use crate::config::{Config, DataStore};
-use std::sync::{Arc, RwLock};
 
 #[derive(Debug)]
-pub enum StorageError {
-    Get(GetObjectError),
-    List(String),
-    Write(String),
-    Io(IoError),
+pub enum StorageError<E> {
+    // Wraps around an error that happened for a specific operation
+    Operation(E),
+    // A validation error happened
+    Validation(String),
+    Unhandled,
 }
 
-impl From<GetObjectError> for StorageError {
-    fn from(err: GetObjectError) -> Self {
-        StorageError::Get(err)
-    }
-}
-
-impl From<RusotoError<GetObjectError>> for StorageError {
-    fn from(err: RusotoError<GetObjectError>) -> Self {
+/// Maps a `rusoto_s3::GetObjectError` to a `StorageError<GetObjectError>`
+impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError<GetObjectError> {
+    fn from(err: RusotoError<rusoto_s3::GetObjectError>) -> Self {
         match err {
-            RusotoError::Service(e) => StorageError::Get(e),
-            _ => StorageError::Io(IoError::last_os_error()),
+            RusotoError::Service(se) => match se {
+                rusoto_s3::GetObjectError::NoSuchKey(s) => {
+                    StorageError::Operation(GetObjectError::NoSuchKey(s))
+                }
+            },
+            _ => StorageError::Unhandled,
         }
-    }
-}
-
-impl From<IoError> for StorageError {
-    fn from(err: IoError) -> Self {
-        StorageError::Io(err)
     }
 }
 
@@ -125,13 +115,15 @@ pub fn client_for_datastore(datastore: &DataStore) -> S3Client {
     S3Client::new_with(dispatcher, provider, region)
 }
 
+#[derive(Debug)]
 pub enum ReachableDatastoreError {
     NoSuchBucket(String),
-    Unknown,
 }
 
 /// <p>Function used to verify if a datastore is valid in terms of reachability</p>
-pub fn can_reach_datastore(datastore: &DataStore) -> Result<bool, ReachableDatastoreError> {
+pub fn can_reach_datastore(
+    datastore: &DataStore,
+) -> Result<bool, StorageError<ReachableDatastoreError>> {
     // Get the Object Storage client
     let s3_client = client_for_datastore(&datastore);
     // perform list call to verify we have access
@@ -150,9 +142,12 @@ pub fn can_reach_datastore(datastore: &DataStore) -> Result<bool, ReachableDatas
             error!("Cannot access bucket: {}", e);
             match e {
                 RusotoError::Service(se) => match se {
-                    ListObjectsError::NoSuchBucket(s) => ReachableDatastoreError::NoSuchBucket(s),
+                    rusoto_s3::ListObjectsError::NoSuchBucket(s) => {
+                        StorageError::Operation(ReachableDatastoreError::NoSuchBucket(s))
+                    }
                 },
-                _ => ReachableDatastoreError::Unknown,
+                RusotoError::Validation(s) => StorageError::Validation(s),
+                _ => StorageError::Unhandled,
             }
         })
         .map(|_| Ok(true))
@@ -163,11 +158,16 @@ fn str_to_streaming_body(s: String) -> rusoto_s3::StreamingBody {
     s.into_bytes().into()
 }
 
+#[derive(Debug)]
+pub enum PutObjectError {
+    Write(String),
+}
+
 pub fn write_to_datastore(
     cfg: Arc<RwLock<Config>>,
     log_name: &str,
     payload: &String,
-) -> Result<bool, StorageError> {
+) -> Result<bool, StorageError<PutObjectError>> {
     let start = Instant::now();
     let read_cfg = cfg.read().unwrap();
     // Select a datastore at random to write to
@@ -199,7 +199,12 @@ pub fn write_to_datastore(
         })
         .sync();
     save_res
-        .map_err(|e| StorageError::Write(format!("Could not write to datastore: {}", e)))
+        .map_err(|e| {
+            StorageError::Operation(PutObjectError::Write(format!(
+                "Could not write to datastore: {}",
+                e
+            )))
+        })
         .map(|_| {
             //TODO: Remove this metric
             let duration = start.elapsed();
@@ -208,11 +213,16 @@ pub fn write_to_datastore(
         })
 }
 
+#[derive(Debug)]
+pub enum ListObjectsError {
+    List(String),
+}
+
 // List all the files for a bucket
 pub fn list_msl_bucket_files(
     logname: &str,
     datastore: &DataStore,
-) -> Result<Vec<String>, StorageError> {
+) -> Result<Vec<String>, StorageError<ListObjectsError>> {
     let s3_client = client_for_datastore(datastore);
     // TODO: Make this function return a stream so we can switch to an async response and not block
     let objects_res = s3_client
@@ -232,11 +242,24 @@ pub fn list_msl_bucket_files(
                 .filter(|f| f.contains(".log"))
                 .collect()
         })
-        .map_err(|e| StorageError::List(format!("Could not list in datastore: {}", e)))
+        .map_err(|e| {
+            StorageError::Operation(ListObjectsError::List(format!(
+                "Could not list in datastore: {}",
+                e
+            )))
+        })
+}
+
+#[derive(Debug)]
+pub enum GetObjectError {
+    NoSuchKey(String),
 }
 
 // Return the contents of a file from a datastore
-pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, StorageError> {
+pub fn read_file(
+    key: &String,
+    datastore: &DataStore,
+) -> Result<String, StorageError<GetObjectError>> {
     let s3_client = client_for_datastore(datastore);
     let get_object_res = s3_client
         .get_object(GetObjectRequest {
@@ -251,7 +274,7 @@ pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, StorageE
             let bytes = f.body.unwrap().concat2().wait().unwrap();
             String::from_utf8(bytes).unwrap()
         })
-        .map_err(|e| StorageError::from(e))
+        .map_err(|e| e.into())
 }
 
 /// Selects a datastore at random. Will return `None` if the log_name

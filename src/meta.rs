@@ -62,10 +62,12 @@ impl Meta {
                 process::exit(0x0100);
             }
             Err(e) => match e {
-                storage::ReachableDatastoreError::NoSuchBucket(s) => {
-                    println!("Metabucket doesn't exists: {:?}", s);
-                    process::exit(0x0100);
-                }
+                storage::StorageError::Operation(ope) => match ope {
+                    storage::ReachableDatastoreError::NoSuchBucket(s) => {
+                        println!("Metabucket doesn't exists: {:?}", s);
+                        process::exit(0x0100);
+                    }
+                },
                 _ => {
                     println!("Metabucket is not reachable");
                     process::exit(0x0100);
