@@ -20,7 +20,6 @@ use std::time::Instant;
 use chrono::{Datelike, Timelike, Utc};
 use futures::future::result;
 use futures::future::FutureResult;
-use futures::stream::Stream;
 use futures::Future;
 use futures::Poll;
 use log::info;
@@ -34,6 +33,8 @@ use rusoto_credential::ProvideAwsCredentials;
 use rusoto_s3::{
     GetObjectError, GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3Client, S3,
 };
+use tokio_codec::{FramedRead, LinesCodec};
+use tokio_io::AsyncRead;
 use uuid::Uuid;
 
 use crate::config::{Config, DataStore};
@@ -224,8 +225,12 @@ pub fn list_msl_bucket_files(
         .map_err(|e| StorageError::List(format!("Could not list in datastore: {}", e)))
 }
 
-// Return the contents of a file from a datastore
-pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, StorageError> {
+// Read file in object store and return its contents as a stream of
+// lines.
+pub fn read_file_line_by_line(
+    key: &String,
+    datastore: &DataStore,
+) -> Result<FramedRead<impl AsyncRead, LinesCodec>, StorageError> {
     let s3_client = client_for_datastore(datastore);
     let get_object_res = s3_client
         .get_object(GetObjectRequest {
@@ -237,8 +242,11 @@ pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, StorageE
 
     get_object_res
         .map(|f| {
-            let bytes = f.body.unwrap().concat2().wait().unwrap();
-            String::from_utf8(bytes).unwrap()
+            FramedRead::new(
+                f.body.unwrap().into_async_read(),
+                // max line length of 1MiB
+                LinesCodec::new_with_max_length(1024 * 1024),
+            )
         })
         .map_err(|e| StorageError::from(e))
 }

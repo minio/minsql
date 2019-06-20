@@ -46,7 +46,7 @@ use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::http::{return_400, return_401};
 use crate::storage::list_msl_bucket_files;
-use crate::storage::read_file;
+use crate::storage::read_file_line_by_line;
 
 bitflags! {
     // ScanFlags determine which regex should be evaluated
@@ -327,20 +327,23 @@ impl Query {
                                             // TODO: Ideally we want to work with the streaming body
                                             should_read_file = true;
                                         }
-                                        let mut all_file_lines = String::new();
+                                        let mut individual_lines = Vec::new();
                                         if should_read_file {
-                                            all_file_lines = match read_file(&f, &ds) {
-                                                Ok(l) => l,
+                                            individual_lines = match read_file_line_by_line(&f, &ds)
+                                            {
+                                                Ok(l) => l.collect().wait().unwrap_or_else(|e| {
+                                                    error!("problem reading file {:?}", e);
+                                                    // TODO: handle error
+                                                    Vec::new()
+                                                }),
                                                 Err(e) => {
                                                     error!("problem reading file {:?}", e);
                                                     // TODO: Handle error. Ideally, we want to stop the channel
-                                                    "".to_string()
+                                                    Vec::new()
                                                 }
                                             };
                                         }
 
-                                        let individual_lines: Vec<String> =
-                                            all_file_lines.lines().map(|x| x.to_string()).collect();
                                         let queries_parse = queries_parse.clone();
                                         let query = query.clone();
                                         let max_lines = Arc::clone(&max_lines);
