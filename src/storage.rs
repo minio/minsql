@@ -13,7 +13,7 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use std::fmt;
+
 use std::io::Error as IoError;
 use std::time::Instant;
 
@@ -40,8 +40,10 @@ use crate::config::{Config, DataStore};
 use std::sync::{Arc, RwLock};
 
 #[derive(Debug)]
-enum StorageError {
+pub enum StorageError {
     Get(GetObjectError),
+    List(String),
+    Write(String),
     Io(IoError),
 }
 
@@ -150,30 +152,11 @@ fn str_to_streaming_body(s: String) -> rusoto_s3::StreamingBody {
     s.into_bytes().into()
 }
 
-#[derive(Debug)]
-pub struct WriteDatastoreError {
-    details: String,
-}
-
-impl WriteDatastoreError {
-    pub fn new(msg: &str) -> WriteDatastoreError {
-        WriteDatastoreError {
-            details: msg.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for WriteDatastoreError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.details)
-    }
-}
-
 pub fn write_to_datastore(
     cfg: Arc<RwLock<Config>>,
     log_name: &str,
     payload: &String,
-) -> Result<bool, WriteDatastoreError> {
+) -> Result<bool, StorageError> {
     let start = Instant::now();
     let read_cfg = cfg.read().unwrap();
     // Select a datastore at random to write to
@@ -205,7 +188,7 @@ pub fn write_to_datastore(
         })
         .sync();
     save_res
-        .map_err(|e| WriteDatastoreError::new(&format!("Could not write to datastore: {}", e)[..]))
+        .map_err(|e| StorageError::Write(format!("Could not write to datastore: {}", e)))
         .map(|_| {
             //TODO: Remove this metric
             let duration = start.elapsed();
@@ -214,30 +197,11 @@ pub fn write_to_datastore(
         })
 }
 
-#[derive(Debug)]
-pub struct ListMslFilesError {
-    details: String,
-}
-
-impl ListMslFilesError {
-    pub fn new(msg: &str) -> ListMslFilesError {
-        ListMslFilesError {
-            details: msg.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for ListMslFilesError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.details)
-    }
-}
-
 // List all the files for a bucket
 pub fn list_msl_bucket_files(
     logname: &str,
     datastore: &DataStore,
-) -> Result<Vec<String>, ListMslFilesError> {
+) -> Result<Vec<String>, StorageError> {
     let s3_client = client_for_datastore(datastore);
     // TODO: Make this function return a stream so we can switch to an async response and not block
     let objects_res = s3_client
@@ -257,11 +221,11 @@ pub fn list_msl_bucket_files(
                 .filter(|f| f.contains(".log"))
                 .collect()
         })
-        .map_err(|e| ListMslFilesError::new(format!("Could not list in datastore: {}", e).as_str()))
+        .map_err(|e| StorageError::List(format!("Could not list in datastore: {}", e)))
 }
 
 // Return the contents of a file from a datastore
-pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, ListMslFilesError> {
+pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, StorageError> {
     let s3_client = client_for_datastore(datastore);
     let get_object_res = s3_client
         .get_object(GetObjectRequest {
@@ -276,9 +240,7 @@ pub fn read_file(key: &String, datastore: &DataStore) -> Result<String, ListMslF
             let bytes = f.body.unwrap().concat2().wait().unwrap();
             String::from_utf8(bytes).unwrap()
         })
-        .map_err(|e| {
-            ListMslFilesError::new(&format!("Could not list files in datastore: {}", e)[..])
-        })
+        .map_err(|e| StorageError::from(e))
 }
 
 /// Selects a datastore at random. Will return `None` if the log_name
