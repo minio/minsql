@@ -332,7 +332,7 @@ impl Query {
                                             all_file_lines = match read_file(&f, &ds) {
                                                 Ok(l) => l,
                                                 Err(e) => {
-                                                    error!("problem reading file {}", e);
+                                                    error!("problem reading file {:?}", e);
                                                     // TODO: Handle error. Ideally, we want to stop the channel
                                                     "".to_string()
                                                 }

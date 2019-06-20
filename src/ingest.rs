@@ -86,7 +86,7 @@ impl Ingest {
                         match write_to_datastore(cfg, &requested_log, &payload) {
                             Ok(x) => x,
                             Err(e) => {
-                                error!("{}", e);
+                                error!("{:?}", e);
                                 let response = Response::builder()
                                     .status(StatusCode::INSUFFICIENT_STORAGE)
                                     .header(header::CONTENT_TYPE, "text/plain")
