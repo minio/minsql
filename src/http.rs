@@ -154,6 +154,15 @@ pub fn return_401() -> Response<Body> {
         .unwrap()
 }
 
+pub fn return_500(message: String) -> Response<Body> {
+    let body = Body::from(format!("Internal error: {}", message));
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .header(header::CONTENT_TYPE, "text/plain")
+        .body(body)
+        .unwrap()
+}
+
 pub fn return_400(message: &str) -> Response<Body> {
     let body = Body::from(format!("Bad request: {}", &message));
     Response::builder()

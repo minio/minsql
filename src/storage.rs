@@ -14,14 +14,16 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::error::Error;
+use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use chrono::{Datelike, Timelike, Utc};
 use futures::future::result;
 use futures::future::FutureResult;
-use futures::Future;
 use futures::Poll;
+use futures::{Future, Stream};
 use log::error;
 use rand::distributions::{IndependentSample, Range};
 use rusoto_core::HttpClient;
@@ -32,7 +34,6 @@ use rusoto_credential::CredentialsError;
 use rusoto_credential::ProvideAwsCredentials;
 use rusoto_s3::{GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3Client, S3};
 use tokio_codec::{FramedRead, LinesCodec};
-use tokio_io::AsyncRead;
 use uuid::Uuid;
 
 use crate::config::{Config, DataStore};
@@ -57,6 +58,24 @@ impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError<GetObjectErro
             },
             _ => StorageError::Unhandled,
         }
+    }
+}
+
+impl<T> fmt::Display for StorageError<T>
+where
+    T: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl<T> Error for StorageError<T>
+where
+    T: std::fmt::Debug,
+{
+    fn description(&self) -> &str {
+        "Storage error?"
     }
 }
 
@@ -254,6 +273,7 @@ pub fn list_msl_bucket_files(
 #[derive(Debug)]
 pub enum GetObjectError {
     NoSuchKey(String),
+    IOError(String),
 }
 
 // Read file in object store and return its contents as a stream of
@@ -261,7 +281,10 @@ pub enum GetObjectError {
 pub fn read_file_line_by_line(
     key: &String,
     datastore: &DataStore,
-) -> Result<FramedRead<impl AsyncRead, LinesCodec>, StorageError<GetObjectError>> {
+) -> Result<
+    impl Stream<Item = String, Error = StorageError<GetObjectError>>,
+    StorageError<GetObjectError>,
+> {
     let s3_client = client_for_datastore(datastore);
     let get_object_res = s3_client
         .get_object(GetObjectRequest {
@@ -278,6 +301,7 @@ pub fn read_file_line_by_line(
                 // max line length of 1MiB
                 LinesCodec::new_with_max_length(1024 * 1024),
             )
+            .map_err(|e| StorageError::Operation(GetObjectError::IOError(format!("{:?}", e))))
         })
         .map_err(|e| e.into())
 }
