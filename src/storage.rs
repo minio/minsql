@@ -237,7 +237,7 @@ pub fn list_msl_bucket_files(
         .map(|objects| {
             objects
                 .contents
-                .unwrap()
+                .unwrap_or(Vec::new())
                 .iter()
                 .map(|f| f.clone().key.unwrap())
                 .filter(|f| f.contains(".log"))
@@ -270,7 +270,6 @@ pub fn read_file_line_by_line(
             ..Default::default()
         })
         .sync();
-
     get_object_res
         .map(|f| {
             FramedRead::new(
