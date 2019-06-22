@@ -17,10 +17,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error;
 use std::fmt;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Instant;
+use std::sync::{Arc, RwLock};
 
-use futures::Sink;
 use futures::{stream, Future, Stream};
 use hyper::{Body, Chunk, Request, Response};
 use log::{error, info};
@@ -28,7 +26,6 @@ use regex::Regex;
 use sqlparser::sqlast::SQLStatement;
 use sqlparser::sqlparser::Parser;
 use sqlparser::sqlparser::ParserError;
-use tokio::sync::mpsc;
 
 use bitflags::bitflags;
 use lazy_static::lazy_static;
@@ -44,9 +41,10 @@ use crate::dialect::MinSQLDialect;
 use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
-use crate::http::{return_400, return_401};
-use crate::storage::list_msl_bucket_files;
-use crate::storage::read_file_line_by_line;
+use crate::http::{return_400, return_401, return_500};
+use crate::storage::{
+    list_msl_bucket_files, read_file_line_by_line, GetObjectError, ListObjectsError, StorageError,
+};
 
 bitflags! {
     // ScanFlags determine which regex should be evaluated
@@ -168,8 +166,6 @@ impl Query {
 
     // performs a query on a log
     pub fn api_log_search(&self, req: Request<Body>, access_token: &String) -> ResponseFuture {
-        let start = Instant::now();
-
         let access_token = access_token.clone();
         let cfg = Arc::clone(&self.config);
         let query_c = Query::new(cfg);
@@ -191,155 +187,87 @@ impl Query {
                             return Ok(return_400("invalid log name"));
                         }
                     };
-                    // Translate the SQL AST into a `QueryParsing` that has all the elements needed to continue
-                    let queries_parse: HashMap<String, QueryParsing> =
-                        match query_c.process_sql(&access_token, &ast) {
-                            Ok(v) => v.into_iter().collect(),
-                            Err(e) => match e {
-                                ProcessingQueryError::Fail(s) => {
-                                    return Ok(return_400(s.clone().as_str()));
-                                }
+
+                    // Translate the SQL AST into a `QueryParsing`
+                    // that has all the elements needed to continue
+                    let parsed_queries = match query_c.process_sql(&access_token, ast) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            return match e {
+                                ProcessingQueryError::Fail(s) => Ok(return_400(s.clone().as_str())),
                                 ProcessingQueryError::UnsupportedQuery(s) => {
-                                    return Ok(return_400(s.clone().as_str()));
+                                    Ok(return_400(s.clone().as_str()))
                                 }
                                 ProcessingQueryError::NoTableFound(s) => {
-                                    return Ok(return_400(s.clone().as_str()));
+                                    Ok(return_400(s.clone().as_str()))
                                 }
-                                ProcessingQueryError::Unauthorized(_s) => {
-                                    return Ok(return_401());
-                                }
-                            },
-                        };
+                                ProcessingQueryError::Unauthorized(_s) => Ok(return_401()),
+                            }
+                        }
+                    };
 
-                    // if we reach this point, no query was invalid
-                    let (tx, rx) = mpsc::unbounded_channel();
-                    let (body_tx, body) = hyper::Body::channel();
-
-                    let ast = ast.clone();
-                    let queries_parse = queries_parse.clone();
                     let cfg = Arc::clone(&query_c.config);
-                    // producer task
-                    hyper::rt::spawn({
-                        // for each query, retrive data
-                        stream::iter_ok(ast)
-                            .fold(tx, move |tx, query| {
-                                let read_cfg2 = cfg.read().unwrap();
-                                let query_data = queries_parse.get(&query.to_string()[..]).unwrap();
 
-                                // We'll pass this mutex to signal how many lines have been read if there's any limitation
-                                let max_lines_to_read: Arc<Mutex<Option<u64>>> =
-                                    Arc::new(Mutex::new(query_data.limit));
+                    // for each query, for each data store, generate
+                    // the list of (data store, objects) tuple.
+                    let args_res: Result<
+                        Vec<(SQLStatement, QueryParsing, Vec<(DataStore, Vec<String>)>)>,
+                        StorageError<ListObjectsError>,
+                    > = parsed_queries
+                        .into_iter()
+                        .map(|(q, q_parse)| {
+                            let file_srcs_res = cfg
+                                .read()
+                                .unwrap()
+                                .datastore
+                                .iter()
+                                .map(|(_, ds)| {
+                                    let log_name = cfg
+                                        .read()
+                                        .unwrap()
+                                        .get_log(&q_parse.log_name)
+                                        .unwrap()
+                                        .name
+                                        .clone()
+                                        .unwrap();
 
-                                // should be safe to unwrap since query validation made sure the log exists
-                                let log = read_cfg2.get_log(&query_data.log_name).unwrap();
-
-                                let log = log.clone();
-                                let my_ds: Vec<DataStore> =
-                                    read_cfg2.datastore.iter().map(|(_, y)| y.clone()).collect();
-                                let queries_parse = queries_parse.clone();
-                                let query = query.clone();
-                                let max_lines = Arc::clone(&max_lines_to_read);
-                                stream::iter_ok(my_ds).fold(tx, move |tx, ds| {
-                                    let log_name = log.name.clone().unwrap();
-                                    let msl_files = match list_msl_bucket_files(&log_name[..], &ds)
-                                    {
-                                        Ok(mf) => mf,
-                                        Err(e) => {
-                                            // TODO: Handler Error. Ideally, we should end the channel and terminate the stream
-                                            // use take_while http://xion.io/post/code/rust-stream-terminate.html with Result
-                                            error!("error reading files from minIO {:?}", e);
-                                            Vec::new()
-                                        }
-                                    };
-                                    // for each file found inside the log
-                                    let ds = ds.clone();
-                                    let queries_parse = queries_parse.clone();
-                                    let query = query.clone();
-                                    let max_lines = Arc::clone(&max_lines);
-                                    stream::iter_ok(msl_files).fold(tx, move |tx, f| {
-                                        // Don't read the file if we have maxed out the lines to return
-                                        let mut max_tak: Option<u64>;
-                                        let protected_data = max_lines.lock().unwrap();
-                                        max_tak = protected_data.clone();
-                                        drop(protected_data);
-                                        //  Based on the content of max_tak we will determine wether or not to
-                                        // read the file. Ee do this so if we are already reached the LIMIT provided
-                                        // we simply stop reading files.
-                                        let mut should_read_file = false;
-                                        if max_tak.is_some() {
-                                            if max_tak.unwrap() > 0 {
-                                                // TODO: Ideally we want to work with the streaming body
-                                                should_read_file = true;
-                                            }
-                                        } else {
-                                            // else take as many as we can (18,446,744,073,709,551,615 lines)
-                                            max_tak = Some(std::u64::MAX);
-                                            // TODO: Ideally we want to work with the streaming body
-                                            should_read_file = true;
-                                        }
-                                        let mut individual_lines = Vec::new();
-                                        if should_read_file {
-                                            individual_lines = match read_file_line_by_line(&f, &ds)
-                                            {
-                                                Ok(l) => l.collect().wait().unwrap_or_else(|e| {
-                                                    error!("problem reading file {:?}", e);
-                                                    // TODO: handle error
-                                                    Vec::new()
-                                                }),
-                                                Err(e) => {
-                                                    error!("problem reading file {:?}", e);
-                                                    // TODO: Handle error. Ideally, we want to stop the channel
-                                                    Vec::new()
-                                                }
-                                            };
-                                        }
-
-                                        let queries_parse = queries_parse.clone();
-                                        let query = query.clone();
-                                        let max_lines = Arc::clone(&max_lines);
-                                        stream::iter_ok(individual_lines)
-                                            .take(max_tak.unwrap())
-                                            .fold(tx, move |tx, line| {
-                                                let query_data = queries_parse
-                                                    .get(&query.to_string()[..])
-                                                    .unwrap();
-
-                                                let outline = evaluate_query_on_line(
-                                                    &query, query_data, line,
-                                                )
-                                                .unwrap_or("".to_string());
-
-                                                // increase line counter
-                                                let mut protected_data = max_lines.lock().unwrap();
-                                                let data = *protected_data;
-                                                if data.is_some() {
-                                                    *protected_data = Some(data.unwrap() - 1);
-                                                }
-                                                drop(protected_data);
-                                                tx.send(outline).map_err(|e| println!("{:?}", e))
-                                            })
-                                    })
+                                    // Returns Result<(ds, files),
+                                    // error>. Need to stop on
+                                    // error.
+                                    list_msl_bucket_files(&log_name[..], &ds)
+                                        .map(|keys| (ds.clone(), keys))
                                 })
-                            })
-                            .map(|_| ()) // Drop tx handle
-                    });
+                                .collect::<Result<
+                                    Vec<(DataStore, Vec<String>)>,
+                                    StorageError<ListObjectsError>,
+                                >>();
 
-                    // consumer task
-                    hyper::rt::spawn({
-                        rx.map_err(|e| {
-                            println!("{:?}", e);
+                            file_srcs_res.map(|v| (q, q_parse, v))
                         })
-                        .fold(body_tx, move |body_tx, msg| {
-                            body_tx
-                                .send(Chunk::from(msg))
-                                .map_err(|e| println!("error = {:?}", e))
-                        })
-                        .map(|_| ()) // drop body_tx handle
-                    });
+                        .collect();
 
-                    let duration = start.elapsed();
-                    info!("Search took: {:?}", duration);
-                    Ok(Response::new(body))
+                    if let Err(e) = args_res {
+                        return Ok(return_500(format!("{:?}", e)));
+                    }
+                    let args = args_res.unwrap();
+
+                    let body_str = // make_query_result_chunks_stream(args);
+                    stream::iter_ok::<_, StorageError<GetObjectError>>(args)
+                        .map(|(q, q_parse, obj_src)| {
+                            let lim = q_parse.limit.unwrap_or(std::u64::MAX);
+
+                            stream::iter_ok::<_, StorageError<GetObjectError>>(obj_src)
+                                .map(|(ds, fs)| stream::iter_ok(fs.into_iter().map(move |f| (ds.clone(), f))))
+                                .flatten()
+                                .and_then(|(ds, f)| read_file_line_by_line(&f, &ds))
+                                .flatten()
+                                .filter_map(move |line| evaluate_query_on_line(&q, &q_parse, line))
+                                .take(lim)
+                        })
+                        .flatten()
+                        .map(|s| Chunk::from(s));
+
+                    Ok(Response::new(Body::wrap_stream(body_str)))
                 }),
         )
     }
@@ -347,8 +275,8 @@ impl Query {
     fn process_statement(
         &self,
         access_token: &String,
-        query: &SQLStatement,
-    ) -> Result<(String, QueryParsing), ProcessingQueryError> {
+        query: SQLStatement,
+    ) -> Result<(SQLStatement, QueryParsing), ProcessingQueryError> {
         lazy_static! {
             static ref SMART_FIELDS_RE: Regex =
                 Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
@@ -660,9 +588,8 @@ impl Query {
         }
 
         // we keep track of the parsing of the queries via their signature.
-        let query_string = query.to_string();
         Ok((
-            query_string,
+            query,
             QueryParsing {
                 log_name,
                 read_all,
@@ -680,10 +607,10 @@ impl Query {
     fn process_sql(
         &self,
         access_token: &String,
-        ast: &Vec<SQLStatement>,
-    ) -> Result<Vec<(String, QueryParsing)>, ProcessingQueryError> {
-        ast.iter()
-            .map(|q| self.process_statement(&access_token, &q))
+        ast: Vec<SQLStatement>,
+    ) -> Result<Vec<(SQLStatement, QueryParsing)>, ProcessingQueryError> {
+        ast.into_iter()
+            .map(|q| self.process_statement(&access_token, q))
             .collect()
     }
 }
@@ -900,7 +827,7 @@ mod query_tests {
 
         let query = "SELECT * FROM mylog".to_string();
         let ast = query_c.parse_query(Chunk::from(query.clone())).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, &ast);
+        let queries_parse = query_c.process_sql(&access_token, ast);
 
         match queries_parse {
             Ok(pq) => {
@@ -922,7 +849,7 @@ mod query_tests {
 
         let query = "SELECT * FROM mylog LIMIT 10".to_string();
         let ast = query_c.parse_query(Chunk::from(query.clone())).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, &ast);
+        let queries_parse = query_c.process_sql(&access_token, ast);
 
         match queries_parse {
             Ok(pq) => {
@@ -948,7 +875,7 @@ mod query_tests {
 
         let query = "SELECT $1, $4 FROM mylog".to_string();
         let ast = query_c.parse_query(Chunk::from(query.clone())).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, &ast);
+        let queries_parse = query_c.process_sql(&access_token, ast);
 
         match queries_parse {
             Ok(pq) => {
@@ -982,7 +909,7 @@ mod query_tests {
 
         let query = "SELECT $1, $4 FROM mylog LIMIT 10".to_string();
         let ast = query_c.parse_query(Chunk::from(query.clone())).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, &ast);
+        let queries_parse = query_c.process_sql(&access_token, ast);
 
         match queries_parse {
             Ok(pq) => {
@@ -1025,7 +952,7 @@ mod query_tests {
 
         let query = "SELECT $ip, $email FROM mylog LIMIT 10".to_string();
         let ast = query_c.parse_query(Chunk::from(query.clone())).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, &ast);
+        let queries_parse = query_c.process_sql(&access_token, ast);
 
         match queries_parse {
             Ok(pq) => {
@@ -1075,7 +1002,7 @@ mod query_tests {
 
         let query = "SELECT $2, $ip, $email FROM mylog LIMIT 10".to_string();
         let ast = query_c.parse_query(Chunk::from(query.clone())).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, &ast);
+        let queries_parse = query_c.process_sql(&access_token, ast);
 
         match queries_parse {
             Ok(pq) => {
@@ -1146,7 +1073,7 @@ mod query_tests {
 
         let query = "SELECT * FROM mylog".to_string();
         let ast = query_c.parse_query(Chunk::from(query.clone())).unwrap();
-        let queries_parse = query_c.process_sql(&provided_access_token, &ast);
+        let queries_parse = query_c.process_sql(&provided_access_token, ast);
 
         match queries_parse {
             Ok(pq) => {
@@ -1172,7 +1099,7 @@ mod query_tests {
 
         let query = "SELECT * FROM incorrect_log".to_string();
         let ast = query_c.parse_query(Chunk::from(query.clone())).unwrap();
-        let queries_parse = query_c.process_sql(&provided_access_token, &ast);
+        let queries_parse = query_c.process_sql(&provided_access_token, ast);
 
         match queries_parse {
             Ok(pq) => {
