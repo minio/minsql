@@ -141,7 +141,7 @@ impl Meta {
                                     })
                             })
                     })
-                    .buffer_unordered(5)
+                    .buffer_unordered(5) // Do up to 5 concurrent get_object calls
                     .collect()
             })
             .map_err(|e| {

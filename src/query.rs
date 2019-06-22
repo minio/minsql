@@ -821,7 +821,7 @@ fn evaluate_query_on_line(
     // filter the line
     let skip_line = line_fails_query_conditions(&line, &query, &projection_values);
 
-    if skip_line {
+    if !skip_line {
         Some(mk_output_line(&projection_values, query_data, line.clone()))
     } else {
         None
