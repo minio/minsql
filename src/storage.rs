@@ -281,19 +281,20 @@ pub enum GetObjectError {
 pub fn read_file_line_by_line(
     key: &String,
     datastore: &DataStore,
-) -> Result<
-    impl Stream<Item = String, Error = StorageError<GetObjectError>>,
-    StorageError<GetObjectError>,
-> {
+) -> impl Stream<Item = String, Error = StorageError<GetObjectError>> {
     let s3_client = client_for_datastore(datastore);
-    let get_object_res = s3_client
+    s3_client
         .get_object(GetObjectRequest {
             bucket: datastore.bucket.clone(),
             key: key.clone(),
             ..Default::default()
         })
-        .sync();
-    get_object_res
+        .map_err(|e| match e {
+            rusoto_core::RusotoError::Service(rusoto_s3::GetObjectError::NoSuchKey(key)) => {
+                StorageError::Operation(GetObjectError::NoSuchKey(key))
+            }
+            e_ => StorageError::Operation(GetObjectError::IOError(format!("{:?}", e_))),
+        })
         .map(|f| {
             FramedRead::new(
                 f.body.unwrap().into_async_read(),
@@ -302,7 +303,7 @@ pub fn read_file_line_by_line(
             )
             .map_err(|e| StorageError::Operation(GetObjectError::IOError(format!("{:?}", e))))
         })
-        .map_err(|e| e.into())
+        .flatten_stream()
 }
 
 /// Selects a datastore at random. Will return `None` if the log_name

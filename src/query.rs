@@ -232,8 +232,7 @@ impl Query {
                                         .unwrap();
 
                                     // Returns Result<(ds, files),
-                                    // error>. Need to stop on
-                                    // error.
+                                    // error>. Need to stop on error.
                                     list_msl_bucket_files(&log_name[..], &ds)
                                         .map(|keys| (ds.clone(), keys))
                                 })
@@ -251,15 +250,18 @@ impl Query {
                     }
                     let args = args_res.unwrap();
 
-                    let body_str = // make_query_result_chunks_stream(args);
-                    stream::iter_ok::<_, StorageError<GetObjectError>>(args)
+                    let body_str = stream::iter_ok::<_, StorageError<GetObjectError>>(args)
                         .map(|(q, q_parse, obj_src)| {
                             let lim = q_parse.limit.unwrap_or(std::u64::MAX);
 
                             stream::iter_ok::<_, StorageError<GetObjectError>>(obj_src)
-                                .map(|(ds, fs)| stream::iter_ok(fs.into_iter().map(move |f| (ds.clone(), f))))
+                                .map(|(ds, fs)| {
+                                    stream::iter_ok::<_, StorageError<GetObjectError>>(
+                                        fs.into_iter().map(move |f| (ds.clone(), f)),
+                                    )
+                                })
                                 .flatten()
-                                .and_then(|(ds, f)| read_file_line_by_line(&f, &ds))
+                                .map(|(ds, f)| read_file_line_by_line(&f, &ds))
                                 .flatten()
                                 .filter_map(move |line| evaluate_query_on_line(&q, &q_parse, line))
                                 .take(lim)
