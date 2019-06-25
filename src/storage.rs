@@ -23,7 +23,7 @@ use chrono::{Datelike, Timelike, Utc};
 use futures::future::result;
 use futures::future::FutureResult;
 use futures::Poll;
-use futures::{Future, Stream};
+use futures::{stream, Future, Stream};
 use log::error;
 use rand::distributions::{IndependentSample, Range};
 use rusoto_core::HttpClient;
@@ -242,25 +242,13 @@ pub enum ListObjectsError {
 pub fn list_msl_bucket_files(
     logname: &str,
     datastore: &DataStore,
-) -> Result<Vec<String>, StorageError<ListObjectsError>> {
+) -> impl Stream<Item = String, Error = StorageError<ListObjectsError>> {
     let s3_client = client_for_datastore(datastore);
-    // TODO: Make this function return a stream so we can switch to an async response and not block
-    let objects_res = s3_client
+    s3_client
         .list_objects(ListObjectsRequest {
             bucket: datastore.bucket.clone(),
             prefix: Some(format!("minsql/{}", logname)),
             ..Default::default()
-        })
-        .sync();
-    objects_res
-        .map(|objects| {
-            objects
-                .contents
-                .unwrap_or(Vec::new())
-                .iter()
-                .map(|f| f.clone().key.unwrap())
-                .filter(|f| f.contains(".log"))
-                .collect()
         })
         .map_err(|e| {
             StorageError::Operation(ListObjectsError::List(format!(
@@ -268,6 +256,18 @@ pub fn list_msl_bucket_files(
                 e
             )))
         })
+        .map(|objects| {
+            stream::iter_ok::<_, StorageError<ListObjectsError>>(
+                objects
+                    .contents
+                    .unwrap_or(Vec::new())
+                    .into_iter()
+                    .map(|f| f.key.unwrap())
+                    .filter(|f| f.ends_with(".log"))
+                    .collect::<Vec<String>>(),
+            )
+        })
+        .flatten_stream()
 }
 
 #[derive(Debug)]

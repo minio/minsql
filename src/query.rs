@@ -216,7 +216,10 @@ impl Query {
                     > = parsed_queries
                         .into_iter()
                         .map(|(q, q_parse)| {
-                            let file_srcs_res = cfg
+                            let file_srcs_res: Result<
+                                Vec<(DataStore, Vec<String>)>,
+                                StorageError<ListObjectsError>,
+                            > = cfg
                                 .read()
                                 .unwrap()
                                 .datastore
@@ -232,14 +235,15 @@ impl Query {
                                         .unwrap();
 
                                     // Returns Result<(ds, files),
-                                    // error>. Need to stop on error.
-                                    list_msl_bucket_files(&log_name[..], &ds)
-                                        .map(|keys| (ds.clone(), keys))
+                                    // error>. Need to stop on
+                                    // error. TODO: eliminate the
+                                    // wait() call.
+                                    list_msl_bucket_files(log_name.as_str(), &ds)
+                                        .collect()
+                                        .and_then(|keys| Ok((ds.clone(), keys)))
+                                        .wait()
                                 })
-                                .collect::<Result<
-                                    Vec<(DataStore, Vec<String>)>,
-                                    StorageError<ListObjectsError>,
-                                >>();
+                                .collect();
 
                             file_srcs_res.map(|v| (q, q_parse, v))
                         })
