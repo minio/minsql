@@ -30,7 +30,7 @@ use log::{error, info};
 
 use crate::config::Config;
 use crate::http::ResponseFuture;
-use crate::storage::{write_to_datastore, PutObjectError, StorageError};
+use crate::storage::write_to_datastore;
 
 #[derive(Debug)]
 pub struct IngestBuffer {
@@ -132,10 +132,7 @@ impl Ingest {
                             let cfg = Arc::clone(&flush_cfg);
                             let ingest_c = Ingest::new(cfg);
                             hyper::rt::spawn({
-                                ingest_c
-                                    .flush_buffer(&log_name, log_ingest_buffers)
-                                    .map(|_| ())
-                                    .map_err(|_| ())
+                                ingest_c.flush_buffer(&log_name, log_ingest_buffers)
                             });
                         }
 
@@ -151,12 +148,12 @@ impl Ingest {
         )
     }
 
-    /// Flushes an `IngestBuffer` for a given `log_name`
+    /// Flushes an `IngestBuffer` for a given `log_name` to MinIO
     pub fn flush_buffer(
         &self,
         log_name: &String,
         ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
-    ) -> impl Future<Item = bool, Error = StorageError<PutObjectError>> {
+    ) -> impl Future<Item = (), Error = ()> {
         let ingest_buffer = ingest_buffers.get(&log_name[..]).unwrap();
         let mut flushed_data: Vec<String> = Vec::new();
         // lock the ingest_buffer and access it's protected data.s
@@ -170,20 +167,23 @@ impl Ingest {
             // Write the data to object storage
             let payload = flushed_data.join("");
             let cfg = Arc::clone(&self.config);
-            let res = write_to_datastore(cfg, &log_name, &payload).then(|we| {
-                match &we {
-                    Ok(_) => (),
-                    Err(e) => {
-                        error!("Problem flushing data out!! {:?}", e);
-                    }
-                };
-                we
-            });
+            let res = write_to_datastore(cfg, &log_name, &payload)
+                .then(|we| {
+                    match &we {
+                        Ok(_) => (),
+                        Err(e) => {
+                            error!("Problem flushing data out!! {:?}", e);
+                        }
+                    };
+                    we
+                })
+                .map(|_| ())
+                .map_err(|_| ());
             //TODO: Remove this line later on
             info!("Flushing {}: {} lines", &log_name, flushed_data.len());
             Either::A(res)
         } else {
-            Either::B(futures::future::ok(true))
+            Either::B(futures::future::ok(()))
         }
     }
 }

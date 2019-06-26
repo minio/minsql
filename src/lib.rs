@@ -227,10 +227,7 @@ impl MinSQL {
                 .for_each(move |_| {
                     let ingest_buffer3 = Arc::clone(&ingest_buffer2);
                     let log_name = log_name.clone();
-                    ingest_c
-                        .flush_buffer(&log_name, ingest_buffer3)
-                        .map(|_| ())
-                        .map_err(|_| ())
+                    ingest_c.flush_buffer(&log_name, ingest_buffer3)
                 });
 
                 hyper::rt::spawn(task);
