@@ -19,6 +19,7 @@ use std::mem;
 use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
 
+use futures::future::Either;
 use futures::{Future, Stream};
 use hyper::header;
 use hyper::Body;
@@ -29,7 +30,7 @@ use log::{error, info};
 
 use crate::config::Config;
 use crate::http::ResponseFuture;
-use crate::storage::write_to_datastore;
+use crate::storage::{write_to_datastore, PutObjectError, StorageError};
 
 #[derive(Debug)]
 pub struct IngestBuffer {
@@ -83,24 +84,39 @@ impl Ingest {
                     // if the commit window is 0s, commit immediately
                     if log.commit_window == "0" {
                         let cfg = Arc::clone(&ingest_c.config);
-                        match write_to_datastore(cfg, &requested_log, &payload) {
-                            Ok(x) => x,
-                            Err(e) => {
-                                error!("{:?}", e);
-                                let response = Response::builder()
-                                    .status(StatusCode::INSUFFICIENT_STORAGE)
-                                    .header(header::CONTENT_TYPE, "text/plain")
-                                    .body(Body::from("fail"))?;
-                                return Ok(response);
-                            }
-                        };
-
-                        // Send response that the request has been received successfully
-                        let response = Response::builder()
-                            .status(StatusCode::OK)
-                            .header(header::CONTENT_TYPE, "text/plain")
-                            .body(Body::from("ok"))?;
-                        Ok(response)
+                        let response_body = write_to_datastore(cfg, &requested_log, &payload).then(
+                            |res| -> Result<Response<Body>, _> {
+                                match res {
+                                    Ok(true) => {
+                                        // Send response that the request has been received successfully
+                                        let response = Response::builder()
+                                            .status(StatusCode::OK)
+                                            .header(header::CONTENT_TYPE, "text/plain")
+                                            .body(Body::from("ok"))
+                                            .unwrap();
+                                        Ok(response)
+                                    }
+                                    Ok(false) => {
+                                        let response = Response::builder()
+                                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                            .header(header::CONTENT_TYPE, "text/plain")
+                                            .body(Body::from("fail"))
+                                            .unwrap();
+                                        Ok(response)
+                                    }
+                                    Err(e) => {
+                                        error!("{:?}", e);
+                                        let response = Response::builder()
+                                            .status(StatusCode::INSUFFICIENT_STORAGE)
+                                            .header(header::CONTENT_TYPE, "text/plain")
+                                            .body(Body::from("fail"))
+                                            .unwrap();
+                                        Ok(response)
+                                    }
+                                }
+                            },
+                        );
+                        Either::A(response_body)
                     } else {
                         // buffer the message
                         let log_name = log.name.clone().unwrap();
@@ -116,16 +132,20 @@ impl Ingest {
                             let cfg = Arc::clone(&flush_cfg);
                             let ingest_c = Ingest::new(cfg);
                             hyper::rt::spawn({
-                                ingest_c.flush_buffer(&log_name, log_ingest_buffers);
-                                futures::future::ok(())
+                                ingest_c
+                                    .flush_buffer(&log_name, log_ingest_buffers)
+                                    .map(|_| ())
+                                    .map_err(|_| ())
                             });
                         }
 
                         let response = Response::builder()
                             .status(StatusCode::OK)
                             .header(header::CONTENT_TYPE, "text/plain")
-                            .body(Body::from("ok."))?;
-                        Ok(response)
+                            .body(Body::from("ok."))
+                            .unwrap();
+                        Either::B(futures::future::ok(response))
+                        //                        Ok(response)
                     }
                 }),
         )
@@ -136,7 +156,7 @@ impl Ingest {
         &self,
         log_name: &String,
         ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
-    ) {
+    ) -> impl Future<Item = bool, Error = StorageError<PutObjectError>> {
         let ingest_buffer = ingest_buffers.get(&log_name[..]).unwrap();
         let mut flushed_data: Vec<String> = Vec::new();
         // lock the ingest_buffer and access it's protected data.s
@@ -150,14 +170,20 @@ impl Ingest {
             // Write the data to object storage
             let payload = flushed_data.join("");
             let cfg = Arc::clone(&self.config);
-            match write_to_datastore(cfg, &log_name, &payload) {
-                Ok(_) => (),
-                Err(e) => {
-                    error!("Problem flushing data out!! {:?}", e);
-                }
-            }
+            let res = write_to_datastore(cfg, &log_name, &payload).then(|we| {
+                match &we {
+                    Ok(_) => (),
+                    Err(e) => {
+                        error!("Problem flushing data out!! {:?}", e);
+                    }
+                };
+                we
+            });
             //TODO: Remove this line later on
             info!("Flushing {}: {} lines", &log_name, flushed_data.len());
+            Either::A(res)
+        } else {
+            Either::B(futures::future::ok(true))
         }
     }
 }

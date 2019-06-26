@@ -187,7 +187,7 @@ pub fn write_to_datastore(
     cfg: Arc<RwLock<Config>>,
     log_name: &str,
     payload: &String,
-) -> Result<bool, StorageError<PutObjectError>> {
+) -> impl Future<Item = bool, Error = StorageError<PutObjectError>> {
     let start = Instant::now();
     let read_cfg = cfg.read().unwrap();
     // Select a datastore at random to write to
@@ -210,22 +210,20 @@ pub fn write_to_datastore(
     let strbody = str_to_streaming_body(payload.clone());
     // save the payload
     // TODO: Make this function return a stream so we can switch to an async response and not block
-    let save_res = s3_client
+    s3_client
         .put_object(PutObjectRequest {
             bucket: datastore.bucket.clone(),
             key: destination,
             body: Some(strbody),
             ..Default::default()
         })
-        .sync();
-    save_res
         .map_err(|e| {
             StorageError::Operation(PutObjectError::Write(format!(
                 "Could not write to datastore: {}",
                 e
             )))
         })
-        .map(|_| {
+        .map(move |_| {
             //TODO: Remove this metric
             let duration = start.elapsed();
             println!("Writing to minio: {:?}", duration);
