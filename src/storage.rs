@@ -25,7 +25,7 @@ use futures::future::FutureResult;
 use futures::Poll;
 use futures::{stream, Future, Stream};
 use log::error;
-use rand::distributions::{IndependentSample, Range};
+use rand::Rng;
 use rusoto_core::HttpClient;
 use rusoto_core::Region;
 use rusoto_core::RusotoError;
@@ -310,7 +310,8 @@ fn rand_datastore<'a>(cfg: &'a Config, log_name: &str) -> Option<&'a DataStore> 
         .get(log_name)
         .and_then(|log| {
             let n = log.datastores.len();
-            let i = Range::new(0, n).ind_sample(&mut rand::thread_rng());
+            let mut rng = rand::thread_rng();
+            let i = rng.gen_range(0, n);
             log.datastores.iter().skip(i).next()
         })
         .and_then(|name| cfg.datastore.get(&name[..]))
