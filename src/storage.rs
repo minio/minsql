@@ -191,6 +191,7 @@ pub fn write_to_datastore(
     let datastore = rand_datastore(&read_cfg, &log_name).unwrap();
     // Get the Object Storage client
     let s3_client = client_for_datastore(&datastore);
+    // Prepare the name of the log
     let now = Utc::now();
     let my_uuid = Uuid::new_v4();
     let target_file = format!(
