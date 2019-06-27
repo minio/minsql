@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, RwLock};
 
 use futures::{future, Future};
@@ -45,7 +45,7 @@ impl Http {
     pub fn request_router(
         &self,
         req: Request<Body>,
-        log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
+        log_ingest_buffers: Arc<HashMap<String, Mutex<VecDeque<IngestBuffer>>>>,
     ) -> ResponseFuture {
         let cfg = self.config.read().unwrap();
         match (req.method(), req.uri().path()) {

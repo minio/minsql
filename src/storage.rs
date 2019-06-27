@@ -174,10 +174,6 @@ pub fn can_reach_datastore(
         .unwrap_or(Ok(false))
 }
 
-fn str_to_streaming_body(s: String) -> rusoto_s3::StreamingBody {
-    s.into_bytes().into()
-}
-
 #[derive(Debug)]
 pub enum PutObjectError {
     Write(String),
@@ -186,8 +182,9 @@ pub enum PutObjectError {
 pub fn write_to_datastore(
     cfg: Arc<RwLock<Config>>,
     log_name: &str,
-    payload: &String,
-) -> impl Future<Item = bool, Error = StorageError<PutObjectError>> {
+    payload: Vec<String>,
+    length: i64,
+) -> impl Future<Item = (), Error = StorageError<PutObjectError>> {
     let start = Instant::now();
     let read_cfg = cfg.read().unwrap();
     // Select a datastore at random to write to
@@ -207,14 +204,16 @@ pub fn write_to_datastore(
     );
     let destination = format!("minsql/{}", target_file);
     // turn the payload into a streaming body
-    let strbody = str_to_streaming_body(payload.clone());
+    let stream_of_bytes = stream::iter_ok(payload).map(|s| s.into_bytes());
+    let streaming_body = rusoto_s3::StreamingBody::new(stream_of_bytes);
     // save the payload
     // TODO: Make this function return a stream so we can switch to an async response and not block
     s3_client
         .put_object(PutObjectRequest {
             bucket: datastore.bucket.clone(),
             key: destination,
-            body: Some(strbody),
+            body: Some(streaming_body),
+            content_length: Some(length),
             ..Default::default()
         })
         .map_err(|e| {
@@ -227,7 +226,6 @@ pub fn write_to_datastore(
             //TODO: Remove this metric
             let duration = start.elapsed();
             println!("Writing to minio: {:?}", duration);
-            true
         })
 }
 
