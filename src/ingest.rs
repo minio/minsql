@@ -14,7 +14,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::mem;
 use std::sync::Mutex;
 use std::sync::{Arc, RwLock};
 
@@ -59,7 +60,7 @@ impl Ingest {
     pub fn api_log_store(
         &self,
         req: Request<Body>,
-        log_ingest_buffers: Arc<HashMap<String, Mutex<VecDeque<IngestBuffer>>>>,
+        log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
         requested_log: String,
     ) -> ResponseFuture {
         let locked_cfg = Arc::clone(&self.config);
@@ -116,12 +117,11 @@ impl Ingest {
                         let ingest_buffer = log_ingest_buffers.get(&log_name[..]).unwrap();
                         let mut protected_data = ingest_buffer.lock().unwrap();
                         let total_bytes: u64;
-                        {
-                            let mut front_buffer = protected_data.front_mut().unwrap();
-                            front_buffer.total_bytes += payload.len() as u64;
-                            front_buffer.data.push(payload.clone());
-                            total_bytes = front_buffer.total_bytes.clone();
-                        }
+
+                        protected_data.total_bytes += payload.len() as u64;
+                        protected_data.data.push(payload.clone());
+                        total_bytes = protected_data.total_bytes.clone();
+
                         drop(protected_data);
                         // if we are above storage threshold, we will flush the data
                         if total_bytes > 5 * 1024 * 1024 {
@@ -149,42 +149,37 @@ impl Ingest {
     pub fn flush_buffer(
         &self,
         log_name: &String,
-        ingest_buffers: Arc<HashMap<String, Mutex<VecDeque<IngestBuffer>>>>,
+        ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
     ) -> impl Future<Item = (), Error = ()> {
         let ingest_buffer = ingest_buffers.get(&log_name[..]).unwrap();
-        let empty_data = IngestBuffer::new();
-        //        let mut flushed_data: IngestBuffer = IngestBuffer::new();
-        let mut flushed_data: IngestBuffer = IngestBuffer::new();
+        let mut flushed_data: Vec<String> = Vec::new();
         // lock the ingest_buffer and access it's protected data.s
         let mut protected_data = ingest_buffer.lock().unwrap();
+        let mut total_bytes: u64 = 0;
 
-        if protected_data.front().unwrap().total_bytes > 0 {
-            //introduce new front buffer
-            protected_data.push_front(empty_data);
-            flushed_data = protected_data.pop_back().unwrap();
+        if protected_data.total_bytes > 0 {
+            // Swap memory and release lock
+            mem::swap(&mut protected_data.data, &mut flushed_data);
+            total_bytes = protected_data.total_bytes;
+            protected_data.total_bytes = 0;
         }
         drop(protected_data);
-        let data_len = flushed_data.data.len();
+        let data_len = flushed_data.len();
         if data_len > 0 {
             // Write the data to object storage
             let cfg = Arc::clone(&self.config);
-            let res = write_to_datastore(
-                cfg,
-                &log_name,
-                flushed_data.data,
-                flushed_data.total_bytes as i64,
-            )
-            .then(|we| {
-                match &we {
-                    Ok(_) => (),
-                    Err(e) => {
-                        error!("Problem flushing data out!! {:?}", e);
-                    }
-                };
-                we
-            })
-            .map(|_| ())
-            .map_err(|_| ());
+            let res = write_to_datastore(cfg, &log_name, flushed_data, total_bytes as i64)
+                .then(|we| {
+                    match &we {
+                        Ok(_) => (),
+                        Err(e) => {
+                            error!("Problem flushing data out!! {:?}", e);
+                        }
+                    };
+                    we
+                })
+                .map(|_| ())
+                .map_err(|_| ());
             //TODO: Remove this line later on
             info!("Flushing {}: {} lines", &log_name, data_len);
             Either::A(res)

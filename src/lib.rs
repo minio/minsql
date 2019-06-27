@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
 use std::process;
@@ -88,17 +88,14 @@ impl MinSQL {
 
         info!("Starting MinSQL Server");
         // initialize ingest buffers
-        let mut log_ingest_buffers_map: HashMap<String, Mutex<VecDeque<IngestBuffer>>> =
-            HashMap::new();
+        let mut log_ingest_buffers_map: HashMap<String, Mutex<IngestBuffer>> = HashMap::new();
 
         // for each log, initialize an ingest buffer
         for (log_name, _) in &self.config.read().unwrap().log {
-            let mut vd: VecDeque<IngestBuffer> = VecDeque::new();
-            vd.push_front(IngestBuffer::new());
-            log_ingest_buffers_map.insert(log_name.clone(), Mutex::new(vd));
+            log_ingest_buffers_map.insert(log_name.clone(), Mutex::new(IngestBuffer::new()));
         }
 
-        let log_ingest_buffers: Arc<HashMap<String, Mutex<VecDeque<IngestBuffer>>>> =
+        let log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>> =
             Arc::new(log_ingest_buffers_map);
         // create a referece to the hashmap that we will share across intervals below
         let ingest_buffer_interval = Arc::clone(&log_ingest_buffers);
@@ -205,10 +202,7 @@ impl MinSQL {
             _ => panic!("PKCS12 cert or password is missing"),
         }
     }
-    fn start_ingestion_flush_task(
-        &self,
-        ingest_buffer: Arc<HashMap<String, Mutex<VecDeque<IngestBuffer>>>>,
-    ) {
+    fn start_ingestion_flush_task(&self, ingest_buffer: Arc<HashMap<String, Mutex<IngestBuffer>>>) {
         let read_cfg = self.config.read().unwrap();
 
         // for each log, start an interval to flush data at window speed, as long as the
