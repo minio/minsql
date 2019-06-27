@@ -31,6 +31,7 @@ use log::{error, info};
 use crate::config::Config;
 use crate::http::ResponseFuture;
 use crate::storage::write_to_datastore;
+use std::time::Instant;
 
 #[derive(Debug)]
 pub struct IngestBuffer {
@@ -151,6 +152,7 @@ impl Ingest {
         log_name: &String,
         ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
     ) -> impl Future<Item = (), Error = ()> {
+        let start = Instant::now();
         let ingest_buffer = ingest_buffers.get(&log_name[..]).unwrap();
         let mut flushed_data: Vec<String> = Vec::new();
         // lock the ingest_buffer and access it's protected data.s
@@ -181,7 +183,11 @@ impl Ingest {
                 .map(|_| ())
                 .map_err(|_| ());
             //TODO: Remove this line later on
-            info!("Flushing {}: {} lines", &log_name, data_len);
+            let duration = start.elapsed();
+            info!(
+                "Flushing {}: {} lines, took {:?}.",
+                &log_name, data_len, duration
+            );
             Either::A(res)
         } else {
             Either::B(futures::future::ok(()))
