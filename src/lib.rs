@@ -223,13 +223,13 @@ impl MinSQL {
                     Instant::now(),
                     Duration::from_secs(Config::commit_window_to_seconds(&log.commit_window)),
                 )
+                .map_err(|e| panic!("interval errored; err={:?}", e))
                 .for_each(move |_| {
                     let ingest_buffer3 = Arc::clone(&ingest_buffer2);
                     let log_name = log_name.clone();
-                    ingest_c.flush_buffer(&log_name, ingest_buffer3);
-                    Ok(())
-                })
-                .map_err(|e| panic!("interval errored; err={:?}", e));
+                    ingest_c.flush_buffer(&log_name, ingest_buffer3)
+                });
+
                 hyper::rt::spawn(task);
             }
         }
