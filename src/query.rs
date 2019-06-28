@@ -245,16 +245,13 @@ impl Query {
 
                             let limit = q_parse.limit.unwrap_or(std::u64::MAX);
 
-                            let logs_len = log_datastores.len();
+                            let logs_ds_len = log_datastores.len();
 
                             // prepare copies to go into the next future
                             let cfg = Arc::clone(&cfg);
                             let query_state_holder = Arc::clone(&query_state_holder);
 
-                            let cfg2 = Arc::clone(&cfg);
-                            let query_state_holder2 = Arc::clone(&query_state_holder);
-
-                            stream::iter_ok(0..logs_len)
+                            stream::iter_ok(0..logs_ds_len)
                                 .map(move |log_ds_index| {
                                     let cfg_read = cfg.read().unwrap();
                                     let read_state_holder = query_state_holder.read().unwrap();
@@ -275,40 +272,50 @@ impl Query {
                                     // validation should make this unwrapping safe
                                     let ds = cfg_read.datastore.get(ds_name.as_str()).unwrap();
 
+                                    let cfg2 = Arc::clone(&cfg);
+                                    let query_state_holder2 = Arc::clone(&query_state_holder);
+
                                     // Returns Result<(ds, files), error>. Need to stop on error.
                                     // TODO: Stop on error
-                                    list_msl_bucket_files(log_name.as_str(), &ds).map(
-                                        move |obj_key| {
+                                    list_msl_bucket_files(log_name.as_str(), &ds)
+                                        .map(move |obj_key| {
                                             (query_index.clone(), log_ds_index.clone(), obj_key)
-                                        },
-                                    )
-                                })
-                                .flatten()
-                                .map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
-                                .map(move |(query_index, log_ds_index, obj_key)| {
-                                    // TODO: Limit the number of results
-                                    let read_state_holder = query_state_holder2.read().unwrap();
-                                    let q_parse = &read_state_holder.query_parsing[query_index].1;
-
-                                    let cfg_read = cfg2.read().unwrap();
-                                    let log = cfg_read.get_log(&q_parse.log_name).unwrap();
-
-                                    let ds_name = &log.datastores[log_ds_index];
-                                    let ds = cfg_read.datastore.get(ds_name).unwrap();
-
-                                    let query_state_holder2 = Arc::clone(&query_state_holder2);
-
-                                    read_file_line_by_line(&obj_key, &ds)
-                                        .filter_map(move |line| {
+                                        })
+                                        .map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
+                                        .map(move |(query_index, log_ds_index, obj_key)| {
+                                            // TODO: Limit the number of results
                                             let read_state_holder =
                                                 query_state_holder2.read().unwrap();
-                                            let q = &read_state_holder.query_parsing[query_index].0;
                                             let q_parse =
                                                 &read_state_holder.query_parsing[query_index].1;
 
-                                            evaluate_query_on_line(&q, &q_parse, line)
+                                            let cfg_read = cfg2.read().unwrap();
+                                            let log = cfg_read.get_log(&q_parse.log_name).unwrap();
+
+                                            let ds_name = &log.datastores[log_ds_index];
+                                            let ds = cfg_read.datastore.get(ds_name).unwrap();
+
+                                            let query_state_holder2 =
+                                                Arc::clone(&query_state_holder2);
+
+                                            read_file_line_by_line(&obj_key, &ds)
+                                                .filter_map(move |line| {
+                                                    let read_state_holder =
+                                                        query_state_holder2.read().unwrap();
+                                                    let q = &read_state_holder.query_parsing
+                                                        [query_index]
+                                                        .0;
+                                                    let q_parse = &read_state_holder.query_parsing
+                                                        [query_index]
+                                                        .1;
+
+                                                    evaluate_query_on_line(&q, &q_parse, line)
+                                                })
+                                                .map_err(|e| {
+                                                    QueryError::Underlying(format!("{:?}", e))
+                                                }) //temporarely remove error, we need to adress this
                                         })
-                                        .map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
+                                        .flatten()
                                 })
                                 .flatten()
                                 .take(limit)
