@@ -31,7 +31,7 @@ use bitflags::bitflags;
 use lazy_static::lazy_static;
 
 use crate::auth::Auth;
-use crate::config::{Config, DataStore};
+use crate::config::Config;
 use crate::constants::SF_DATE;
 use crate::constants::SF_EMAIL;
 use crate::constants::SF_IP;
@@ -41,10 +41,9 @@ use crate::dialect::MinSQLDialect;
 use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
-use crate::http::{return_400, return_401, return_500};
-use crate::storage::{
-    list_msl_bucket_files, read_file_line_by_line, GetObjectError, ListObjectsError, StorageError,
-};
+use crate::http::{return_400, return_401};
+use crate::storage::{list_msl_bucket_files, read_file_line_by_line};
+use std::error::Error;
 
 bitflags! {
     // ScanFlags determine which regex should be evaluated
@@ -93,6 +92,23 @@ impl error::Error for ParseSqlError {
     fn cause(&self) -> Option<&error::Error> {
         // Generic error, underlying cause isn't tracked.
         None
+    }
+}
+
+#[derive(Debug)]
+pub enum QueryError {
+    Underlying(String),
+}
+
+impl fmt::Display for QueryError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Error for QueryError {
+    fn description(&self) -> &str {
+        "query error?"
     }
 }
 
@@ -169,6 +185,9 @@ impl Query {
         let access_token = access_token.clone();
         let cfg = Arc::clone(&self.config);
         let query_c = Query::new(cfg);
+
+        let query_state_holder = Arc::new(RwLock::new(StateHolder::new()));
+        let query_state_holder = Arc::clone(&query_state_holder);
         // A web api to run against
         Box::new(
             req.into_body()
@@ -202,29 +221,46 @@ impl Query {
                                     Ok(return_400(s.clone().as_str()))
                                 }
                                 ProcessingQueryError::Unauthorized(_s) => Ok(return_401()),
-                            }
+                            };
                         }
                     };
+                    let total_querys = parsed_queries.len();
+                    let mut writable_state = query_state_holder.write().unwrap();
+                    writable_state.query_parsing = parsed_queries;
+
+                    // prepare copies to go into the next future
 
                     let cfg = Arc::clone(&query_c.config);
 
-                    // for each query, for each data store, generate
-                    // the list of (data store, objects) tuple.
-                    let args_res: Result<
-                        Vec<(SQLStatement, QueryParsing, Vec<(DataStore, Vec<String>)>)>,
-                        StorageError<ListObjectsError>,
-                    > = parsed_queries
-                        .into_iter()
-                        .map(|(q, q_parse)| {
-                            let file_srcs_res: Result<
-                                Vec<(DataStore, Vec<String>)>,
-                                StorageError<ListObjectsError>,
-                            > = cfg
-                                .read()
-                                .unwrap()
-                                .datastore
-                                .iter()
-                                .map(|(_, ds)| {
+                    let query_state_holder = Arc::clone(&query_state_holder);
+
+                    let body_str = stream::iter_ok(0..total_querys)
+                        .map(move |query_index| {
+                            // for each query parse, read from all datasources for the log
+                            let read_state_holder = query_state_holder.read().unwrap();
+                            let q_parse = &read_state_holder.query_parsing[query_index].1;
+                            let cfg_read = cfg.read().unwrap();
+                            let log = cfg_read.get_log(&q_parse.log_name).unwrap();
+                            let log_datastores = &log.datastores;
+
+                            let limit = q_parse.limit.unwrap_or(std::u64::MAX);
+
+                            let logs_ds_len = log_datastores.len();
+
+                            // prepare copies to go into the next future
+                            let cfg = Arc::clone(&cfg);
+                            let query_state_holder = Arc::clone(&query_state_holder);
+
+                            stream::iter_ok(0..logs_ds_len)
+                                .map(move |log_ds_index| {
+                                    let cfg_read = cfg.read().unwrap();
+                                    let read_state_holder = query_state_holder.read().unwrap();
+
+                                    let q_parse = &read_state_holder.query_parsing[query_index].1;
+                                    let log = cfg_read.get_log(&q_parse.log_name).unwrap();
+
+                                    let ds_name = &log.datastores[log_ds_index];
+
                                     let log_name = cfg
                                         .read()
                                         .unwrap()
@@ -233,42 +269,56 @@ impl Query {
                                         .name
                                         .clone()
                                         .unwrap();
+                                    // validation should make this unwrapping safe
+                                    let ds = cfg_read.datastore.get(ds_name.as_str()).unwrap();
 
-                                    // Returns Result<(ds, files),
-                                    // error>. Need to stop on
-                                    // error. TODO: eliminate the
-                                    // wait() call.
+                                    let cfg2 = Arc::clone(&cfg);
+                                    let query_state_holder2 = Arc::clone(&query_state_holder);
+
+                                    // Returns Result<(ds, files), error>. Need to stop on error.
+                                    // TODO: Stop on error
                                     list_msl_bucket_files(log_name.as_str(), &ds)
-                                        .collect()
-                                        .and_then(|keys| Ok((ds.clone(), keys)))
-                                        .wait()
-                                })
-                                .collect();
+                                        .map(move |obj_key| {
+                                            (query_index.clone(), log_ds_index.clone(), obj_key)
+                                        })
+                                        .map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
+                                        .map(move |(query_index, log_ds_index, obj_key)| {
+                                            // TODO: Limit the number of results
+                                            let read_state_holder =
+                                                query_state_holder2.read().unwrap();
+                                            let q_parse =
+                                                &read_state_holder.query_parsing[query_index].1;
 
-                            file_srcs_res.map(|v| (q, q_parse, v))
-                        })
-                        .collect();
+                                            let cfg_read = cfg2.read().unwrap();
+                                            let log = cfg_read.get_log(&q_parse.log_name).unwrap();
 
-                    if let Err(e) = args_res {
-                        return Ok(return_500(format!("{:?}", e)));
-                    }
-                    let args = args_res.unwrap();
+                                            let ds_name = &log.datastores[log_ds_index];
+                                            let ds = cfg_read.datastore.get(ds_name).unwrap();
 
-                    let body_str = stream::iter_ok::<_, StorageError<GetObjectError>>(args)
-                        .map(|(q, q_parse, obj_src)| {
-                            let lim = q_parse.limit.unwrap_or(std::u64::MAX);
+                                            let query_state_holder2 =
+                                                Arc::clone(&query_state_holder2);
 
-                            stream::iter_ok::<_, StorageError<GetObjectError>>(obj_src)
-                                .map(|(ds, fs)| {
-                                    stream::iter_ok::<_, StorageError<GetObjectError>>(
-                                        fs.into_iter().map(move |f| (ds.clone(), f)),
-                                    )
+                                            read_file_line_by_line(&obj_key, &ds)
+                                                .filter_map(move |line| {
+                                                    let read_state_holder =
+                                                        query_state_holder2.read().unwrap();
+                                                    let q = &read_state_holder.query_parsing
+                                                        [query_index]
+                                                        .0;
+                                                    let q_parse = &read_state_holder.query_parsing
+                                                        [query_index]
+                                                        .1;
+
+                                                    evaluate_query_on_line(&q, &q_parse, line)
+                                                })
+                                                .map_err(|e| {
+                                                    QueryError::Underlying(format!("{:?}", e))
+                                                }) //temporarely remove error, we need to adress this
+                                        })
+                                        .flatten()
                                 })
                                 .flatten()
-                                .map(|(ds, f)| read_file_line_by_line(&f, &ds))
-                                .flatten()
-                                .filter_map(move |line| evaluate_query_on_line(&q, &q_parse, line))
-                                .take(lim)
+                                .take(limit)
                         })
                         .flatten()
                         .map(|s| Chunk::from(s));
@@ -779,6 +829,18 @@ enum ProcessingQueryError {
     UnsupportedQuery(String),
     NoTableFound(String),
     Unauthorized(String),
+}
+
+struct StateHolder {
+    query_parsing: Vec<(SQLStatement, QueryParsing)>,
+}
+
+impl StateHolder {
+    fn new() -> StateHolder {
+        StateHolder {
+            query_parsing: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]

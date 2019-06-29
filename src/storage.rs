@@ -235,7 +235,8 @@ pub enum ListObjectsError {
     List(String),
 }
 
-// List all the files for a bucket
+/// List all the files for a bucket
+/// returns a stream of file names
 pub fn list_msl_bucket_files(
     logname: &str,
     datastore: &DataStore,
