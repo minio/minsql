@@ -6,6 +6,19 @@ MinSQL is a log search engine designed with simplicity in mind to the extent tha
 
 ## To build
 
+### Build dependencies:
+
+Make sure you have installed
+ - `OpenSSL`:
+    - Debian/Ubuntu: `sudo apt install libssl-dev`
+    - RedHat/Fedora: `sudo dnf install openssl-devel`
+ - `pkg-config`:
+    - Debian/Ubuntu: `sudo apt install pkg-config`
+    - RedHat/Fedora: `sudo dnf install pkgconfig`
+ - `hyperscan-dev`:  
+    - Debian/Ubuntu: `sudo apt install libhyperscan-dev`
+    - RedHat/Fedora: `sudo dnf install hyperscan`
+
 To build the project simply run 
 ```bash
 cargo build --release
