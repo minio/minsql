@@ -46,7 +46,6 @@ pub fn evaluate(
     projection_values: &HashMap<String, Option<String>>,
     line: &String,
 ) -> bool {
-    println!("eek");
     match ast_node {
         ASTNode::SQLNested(nested_ast) => {
             return evaluate(&nested_ast, projection_values, line);
@@ -81,12 +80,9 @@ pub fn evaluate(
                     return left_eval || right_eval;
                 }
                 SQLBinaryOperator::Eq => {
-                    println!("eq");
-
                     if identifier != "$line"
                         && projection_values.contains_key(&identifier[..]) == false
                     {
-                        println!("bin cancel?! {}", &identifier);
                         return false;
                     }
 
