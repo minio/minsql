@@ -419,6 +419,42 @@ mod filter_tests {
     }
 
     #[test]
+    fn select_sf_is_null() {
+        run_test(FilterTestCase {
+            query_stmt: "SELECT * FROM mylog WHERE $ip IS NULL".to_string(),
+            line: "\"quoted\"".to_string(),
+            expected_pass: true,
+        });
+    }
+
+    #[test]
+    fn select_sf_is_null_fail() {
+        run_test(FilterTestCase {
+            query_stmt: "SELECT * FROM mylog WHERE $ip IS NULL".to_string(),
+            line: "192.168.0.2 \"quoted\"".to_string(),
+            expected_pass: false,
+        });
+    }
+
+    #[test]
+    fn select_sf_not_null() {
+        run_test(FilterTestCase {
+            query_stmt: "SELECT * FROM mylog WHERE $ip IS NOT NULL".to_string(),
+            line: "192.168.0.2 \"quoted\"".to_string(),
+            expected_pass: true,
+        });
+    }
+
+    #[test]
+    fn select_sf_not_null_fail() {
+        run_test(FilterTestCase {
+            query_stmt: "SELECT * FROM mylog WHERE $ip IS NOT NULL".to_string(),
+            line: "\"quoted\"".to_string(),
+            expected_pass: false,
+        });
+    }
+
+    #[test]
     fn select_and_eq() {
         run_test(FilterTestCase {
             query_stmt: "SELECT * FROM mylog WHERE $ip='192.168.0.1' AND $quoted='quoted'"
