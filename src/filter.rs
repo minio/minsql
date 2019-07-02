@@ -15,6 +15,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use std::collections::HashMap;
 
+use log::info;
 use sqlparser::sqlast::{ASTNode, SQLBinaryOperator, SQLStatement};
 
 pub fn line_fails_query_conditions(
@@ -41,6 +42,8 @@ pub fn line_fails_query_conditions(
     return skip_line;
 }
 
+/// Evalates a single line against the filtering logic stated by the provided `ASTNode` and returns
+/// whether the line passes the conditions or fails them.
 pub fn evaluate(
     ast_node: &ASTNode,
     projection_values: &HashMap<String, Option<String>>,
@@ -51,7 +54,13 @@ pub fn evaluate(
             return evaluate(&nested_ast, projection_values, line);
         }
         ASTNode::SQLIsNotNull(ast) => {
-            let identifier = get_identifier_from_ast(&ast);
+            let identifier = match get_identifier_from_ast(&ast) {
+                Some(v) => v,
+                None => {
+                    // Could not extract identifier, unsupported AST Node
+                    return false;
+                }
+            };
             if projection_values.contains_key(&identifier[..]) == false
                 || projection_values[&identifier].is_none()
             {
@@ -60,7 +69,13 @@ pub fn evaluate(
             return true;
         }
         ASTNode::SQLIsNull(ast) => {
-            let identifier = get_identifier_from_ast(&ast);
+            let identifier = match get_identifier_from_ast(&ast) {
+                Some(v) => v,
+                None => {
+                    // Could not extract identifier, unsupported AST Node
+                    return false;
+                }
+            };
             if !projection_values[&identifier].is_none() {
                 return false;
             }
@@ -232,24 +247,23 @@ pub fn evaluate(
                     }
                 }
                 xop => {
+                    info!("Unhandled operator {:?}", xop);
                     return false;
                 }
             }
         }
         x => {
+            info!("Unhandled operation {:?}", x);
             return false;
         }
     };
 }
 
 /// Extracts an `ASTNode` identifier as a `String`
-pub fn get_identifier_from_ast(ast: &ASTNode) -> String {
+pub fn get_identifier_from_ast(ast: &ASTNode) -> Option<String> {
     match ast {
-        ASTNode::SQLIdentifier(ref identifier) => identifier.to_string(),
-        _ => {
-            // TODO: Should we be retunring anything at all?
-            "".to_string()
-        }
+        ASTNode::SQLIdentifier(ref identifier) => Some(identifier.to_string()),
+        _ => None,
     }
 }
 
@@ -336,14 +350,14 @@ mod filter_tests {
     fn get_identifier_from_ast_node() {
         let ast_node = ASTNode::SQLIdentifier("test_id".to_owned());
         let identifier = get_identifier_from_ast(&ast_node);
-        assert_eq!(identifier, "test_id");
+        assert_eq!(identifier, Some("test_id".to_string()));
     }
 
     #[test]
     fn invalid_identifier_from_ast_node() {
         let ast_node = ASTNode::SQLWildcard;
         let identifier = get_identifier_from_ast(&ast_node);
-        assert_eq!(identifier, "");
+        assert_eq!(identifier, None);
     }
 
     #[test]
@@ -563,5 +577,4 @@ mod filter_tests {
             expected_pass: true,
         });
     }
-
 }

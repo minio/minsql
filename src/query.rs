@@ -22,7 +22,7 @@ use std::sync::{Arc, RwLock};
 
 use futures::{stream, Future, Stream};
 use hyper::{Body, Chunk, Request, Response};
-use log::error;
+use log::{error, info};
 use regex::Regex;
 use sqlparser::sqlast::{ASTNode, SQLBinaryOperator, SQLStatement};
 use sqlparser::sqlparser::Parser;
@@ -701,7 +701,7 @@ fn process_fields_for_ast(
             }
         }
         _ => {
-            println!("Unhandled operation");
+            info!("Unhandled operation");
         }
     }
 }
