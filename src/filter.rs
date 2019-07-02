@@ -16,30 +16,23 @@
 use std::collections::HashMap;
 
 use log::info;
-use sqlparser::sqlast::{ASTNode, SQLBinaryOperator, SQLStatement};
+use sqlparser::sqlast::{ASTNode, SQLBinaryOperator, SQLSetExpr, SQLStatement};
 
 pub fn line_fails_query_conditions(
     line: &String,
     query: &SQLStatement,
     projection_values: &HashMap<String, Option<String>>,
 ) -> bool {
-    let mut skip_line = false;
-    match query {
-        sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => match q.body {
-            sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => match &bodyselect.selection {
-                Some(slct) => {
-                    let all_conditions_pass = evaluate(&slct, projection_values, line);
-                    return !all_conditions_pass;
-                }
-                None => {
-                    skip_line = false;
-                }
-            },
-            _ => {}
-        },
-        _ => {}
-    };
-    return skip_line;
+    if let SQLStatement::SQLQuery(ref q) = query {
+        if let SQLSetExpr::Select(ref select) = q.body {
+            if let Some(selection) = &select.selection {
+                let all_conditions_pass = evaluate(&selection, projection_values, line);
+                return !all_conditions_pass; // skip if not all conditions pass
+            }
+        }
+    }
+
+    false // otherwise, don't skip line
 }
 
 /// Evalates a single line against the filtering logic stated by the provided `ASTNode` and returns
@@ -118,18 +111,11 @@ pub fn evaluate(
                         _ => "".to_string(),
                     };
 
-                    let pval = projection_values.get(&identifier).unwrap();
-                    match pval {
-                        Some(ref s) => {
-                            if s == &op_value {
-                                return true;
-                            }
-                        }
-                        None => {
-                            return false;
-                        }
-                    };
-                    return false;
+                    if let Some(ref s) = projection_values.get(&identifier).unwrap() {
+                        return s == &op_value;
+                    } else {
+                        return false;
+                    }
                 }
                 SQLBinaryOperator::NotEq => {
                     if identifier != "$line"
@@ -153,18 +139,11 @@ pub fn evaluate(
                         },
                         _ => "".to_string(),
                     };
-                    let pval = projection_values.get(&identifier).unwrap();
-                    match pval {
-                        Some(ref s) => {
-                            if s == &op_value {
-                                return false;
-                            }
-                        }
-                        None => {
-                            return false;
-                        }
-                    };
-                    return true;
+                    if let Some(ref s) = projection_values.get(&identifier).unwrap() {
+                        return s != &op_value;
+                    } else {
+                        return false;
+                    }
                 }
                 SQLBinaryOperator::Like => {
                     if identifier != "$line"
@@ -192,18 +171,11 @@ pub fn evaluate(
                     if identifier == "$line" {
                         return line.contains(&op_value[..]);
                     } else {
-                        let pval = projection_values.get(&identifier).unwrap();
-                        match pval {
-                            Some(ref s) => {
-                                if s.contains(&op_value) == false {
-                                    return false;
-                                }
-                            }
-                            None => {
-                                return false;
-                            }
-                        };
-                        return true;
+                        if let Some(ref s) = projection_values.get(&identifier).unwrap() {
+                            return s.contains(&op_value);
+                        } else {
+                            return false;
+                        }
                     }
                 }
                 SQLBinaryOperator::NotLike => {
@@ -232,18 +204,11 @@ pub fn evaluate(
                     if identifier == "$line" {
                         return !line.contains(&op_value[..]);
                     } else {
-                        let pval = projection_values.get(&identifier).unwrap();
-                        match pval {
-                            Some(ref s) => {
-                                if s.contains(&op_value) == true {
-                                    return false;
-                                }
-                            }
-                            None => {
-                                return false;
-                            }
-                        };
-                        return true;
+                        if let Some(ref s) = projection_values.get(&identifier).unwrap() {
+                            return !s.contains(&op_value);
+                        } else {
+                            return false;
+                        }
                     }
                 }
                 xop => {
@@ -261,9 +226,10 @@ pub fn evaluate(
 
 /// Extracts an `ASTNode` identifier as a `String`
 pub fn get_identifier_from_ast(ast: &ASTNode) -> Option<String> {
-    match ast {
-        ASTNode::SQLIdentifier(ref identifier) => Some(identifier.to_string()),
-        _ => None,
+    if let ASTNode::SQLIdentifier(ref id) = ast {
+        Some(id.to_string())
+    } else {
+        None
     }
 }
 
