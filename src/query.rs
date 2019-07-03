@@ -255,14 +255,11 @@ impl Query {
 
                             let (tx, rx) = mpsc::unbounded_channel();
 
-                            println!("total ds {}", &logs_ds_len);
-
                             for i in 0..logs_ds_len {
                                 let cfg = Arc::clone(&cfg);
                                 let query_state_holder = Arc::clone(&query_state_holder);
                                 let tx = tx.clone();
 
-                                println!("produce stream {}", &i);
                                 let task = stream::iter_ok(i..i + 1)
                                     .map(move |log_ds_index| {
                                         let cfg_read = cfg.read().unwrap();
@@ -273,7 +270,6 @@ impl Query {
                                         let log = cfg_read.get_log(&q_parse.log_name).unwrap();
 
                                         let ds_name = &log.datastores[log_ds_index];
-                                        println!("processing {}", &ds_name);
 
                                         let log_name = cfg
                                             .read()
