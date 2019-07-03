@@ -20,6 +20,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, RwLock};
 
+use futures::sink::Sink;
 use futures::{stream, Future, Stream};
 use hyper::{Body, Chunk, Request, Response};
 use log::{error, info};
@@ -27,6 +28,7 @@ use regex::Regex;
 use sqlparser::sqlast::{ASTNode, SQLBinaryOperator, SQLStatement};
 use sqlparser::sqlparser::Parser;
 use sqlparser::sqlparser::ParserError;
+use tokio::sync::mpsc;
 
 use bitflags::bitflags;
 use lazy_static::lazy_static;
@@ -249,79 +251,92 @@ impl Query {
                             // prepare copies to go into the next future
                             let cfg = Arc::clone(&cfg);
                             let query_state_holder = Arc::clone(&query_state_holder);
+                            let query_state_holder3 = Arc::clone(&query_state_holder);
 
-                            stream::iter_ok(0..logs_ds_len)
-                                .map(move |log_ds_index| {
-                                    let cfg_read = cfg.read().unwrap();
-                                    let read_state_holder = query_state_holder.read().unwrap();
+                            let (tx, rx) = mpsc::unbounded_channel();
 
-                                    let q_parse = &read_state_holder.query_parsing[query_index].1;
-                                    let log = cfg_read.get_log(&q_parse.log_name).unwrap();
+                            println!("total ds {}", &logs_ds_len);
 
-                                    let ds_name = &log.datastores[log_ds_index];
+                            for i in 0..logs_ds_len {
+                                let cfg = Arc::clone(&cfg);
+                                let query_state_holder = Arc::clone(&query_state_holder);
+                                let tx = tx.clone();
 
-                                    let log_name = cfg
-                                        .read()
-                                        .unwrap()
-                                        .get_log(&q_parse.log_name)
-                                        .unwrap()
-                                        .name
-                                        .clone()
-                                        .unwrap();
-                                    // validation should make this unwrapping safe
-                                    let ds = cfg_read.datastore.get(ds_name.as_str()).unwrap();
+                                println!("produce stream {}", &i);
+                                let task = stream::iter_ok(i..i + 1)
+                                    .map(move |log_ds_index| {
+                                        let cfg_read = cfg.read().unwrap();
+                                        let read_state_holder = query_state_holder.read().unwrap();
 
-                                    let cfg2 = Arc::clone(&cfg);
-                                    let query_state_holder2 = Arc::clone(&query_state_holder);
+                                        let q_parse =
+                                            &read_state_holder.query_parsing[query_index].1;
+                                        let log = cfg_read.get_log(&q_parse.log_name).unwrap();
 
-                                    // Returns Result<(ds, files), error>. Need to stop on error.
-                                    // TODO: Stop on error
-                                    list_msl_bucket_files(log_name.as_str(), &ds)
-                                        .map(move |obj_key| {
-                                            (query_index.clone(), log_ds_index.clone(), obj_key)
-                                        })
-                                        .map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
-                                        .map(move |(query_index, log_ds_index, obj_key)| {
-                                            // TODO: Limit the number of results
-                                            let read_state_holder =
-                                                query_state_holder2.read().unwrap();
-                                            let q_parse =
-                                                &read_state_holder.query_parsing[query_index].1;
+                                        let ds_name = &log.datastores[log_ds_index];
+                                        println!("processing {}", &ds_name);
 
-                                            let cfg_read = cfg2.read().unwrap();
-                                            let log = cfg_read.get_log(&q_parse.log_name).unwrap();
+                                        let log_name = cfg
+                                            .read()
+                                            .unwrap()
+                                            .get_log(&q_parse.log_name)
+                                            .unwrap()
+                                            .name
+                                            .clone()
+                                            .unwrap();
+                                        // validation should make this unwrapping safe
+                                        let ds = cfg_read.datastore.get(ds_name.as_str()).unwrap();
 
-                                            let ds_name = &log.datastores[log_ds_index];
-                                            let ds = cfg_read.datastore.get(ds_name).unwrap();
+                                        let cfg2 = Arc::clone(&cfg);
+                                        let query_state_holder2 = Arc::clone(&query_state_holder);
 
-                                            let query_state_holder2 =
-                                                Arc::clone(&query_state_holder2);
+                                        // Returns Result<(ds, files), error>. Need to stop on error.
+                                        // TODO: Stop on error
+                                        list_msl_bucket_files(log_name.as_str(), &ds)
+                                            .map(move |obj_key| {
+                                                (query_index.clone(), log_ds_index.clone(), obj_key)
+                                            })
+                                            .map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
+                                            .map(move |(query_index, log_ds_index, obj_key)| {
+                                                // TODO: Limit the number of results
+                                                let read_state_holder =
+                                                    query_state_holder2.read().unwrap();
+                                                let q_parse =
+                                                    &read_state_holder.query_parsing[query_index].1;
 
-                                            read_file_line_by_line(&obj_key, &ds)
-                                                .filter_map(move |line| {
-                                                    let read_state_holder =
-                                                        query_state_holder2.read().unwrap();
-                                                    let q = &read_state_holder.query_parsing
-                                                        [query_index]
-                                                        .0;
-                                                    let q_parse = &read_state_holder.query_parsing
-                                                        [query_index]
-                                                        .1;
+                                                let cfg_read = cfg2.read().unwrap();
+                                                let log =
+                                                    cfg_read.get_log(&q_parse.log_name).unwrap();
 
-                                                    evaluate_query_on_line(&q, &q_parse, line)
-                                                })
-                                                .map_err(|e| {
+                                                let ds_name = &log.datastores[log_ds_index];
+                                                let ds = cfg_read.datastore.get(ds_name).unwrap();
+
+                                                read_file_line_by_line(&obj_key, &ds).map_err(|e| {
                                                     QueryError::Underlying(format!("{:?}", e))
-                                                }) //temporarely remove error, we need to adress this
-                                        })
-                                        .flatten()
-                                })
-                                .flatten()
-                                .take(limit)
+                                                })
+                                            })
+                                            .flatten()
+                                    })
+                                    .flatten()
+                                    .fold(tx, |tx, line| {
+                                        tx.send(line)
+                                            .map_err(|e| QueryError::Underlying(format!("{:?}", e)))
+                                    })
+                                    .map_err(|_| ())
+                                    .map(|_| ());
+                                tokio::spawn(task);
+                            }
+                            rx.filter_map(move |line| {
+                                let read_state_holder = query_state_holder3.read().unwrap();
+                                let q = &read_state_holder.query_parsing[query_index].0;
+                                let q_parse = &read_state_holder.query_parsing[query_index].1;
+
+                                evaluate_query_on_line(&q, &q_parse, line)
+                            })
+                            .map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
+                            .take(limit)
                         })
                         .flatten()
                         .map(|s| Chunk::from(s));
-
                     Ok(Response::new(Body::wrap_stream(body_str)))
                 }),
         )
