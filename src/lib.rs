@@ -43,6 +43,7 @@ mod dialect;
 mod filter;
 mod http;
 mod ingest;
+mod line_taker;
 mod meta;
 mod query;
 mod storage;

@@ -45,6 +45,7 @@ use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::http::{return_400, return_401};
+use crate::line_taker::take_lines;
 use crate::storage::{list_msl_bucket_files, read_file_line_by_line};
 
 bitflags! {
@@ -235,7 +236,7 @@ impl Query {
 
                     let query_state_holder = Arc::clone(&query_state_holder);
 
-                    let body_str = stream::iter_ok(0..total_querys)
+                    let body_str = stream::iter_ok::<_, QueryError>(0..total_querys)
                         .map(move |query_index| {
                             // for each query parse, read from all datasources for the log
                             let read_state_holder = query_state_holder.read().unwrap();
@@ -253,13 +254,14 @@ impl Query {
                             let query_state_holder = Arc::clone(&query_state_holder);
                             let query_state_holder3 = Arc::clone(&query_state_holder);
 
-                            let (tx, rx) = mpsc::unbounded_channel();
-
+                            let (tx, rx) = mpsc::unbounded_channel::<Vec<String>>();
+                            // For each datastore in the log we are going to spawn a task to read the
+                            // logs stored in given datastore.
                             for i in 0..logs_ds_len {
                                 let cfg = Arc::clone(&cfg);
                                 let query_state_holder = Arc::clone(&query_state_holder);
                                 let tx = tx.clone();
-
+                                // Task that will read all the logs for a given datastore
                                 let task = stream::iter_ok(i..i + 1)
                                     .map(move |log_ds_index| {
                                         let cfg_read = cfg.read().unwrap();
@@ -313,26 +315,35 @@ impl Query {
                                             .flatten()
                                     })
                                     .flatten()
-                                    .fold(tx, |tx, line| {
-                                        tx.send(line)
+                                    .fold(tx, |tx, lines| {
+                                        tx.send(lines)
                                             .map_err(|e| QueryError::Underlying(format!("{:?}", e)))
                                     })
                                     .map_err(|_| ())
                                     .map(|_| ());
                                 tokio::spawn(task);
                             }
-                            rx.filter_map(move |line| {
-                                let read_state_holder = query_state_holder3.read().unwrap();
-                                let q = &read_state_holder.query_parsing[query_index].0;
-                                let q_parse = &read_state_holder.query_parsing[query_index].1;
-
-                                evaluate_query_on_line(&q, &q_parse, line)
-                            })
-                            .map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
-                            .take(limit)
+                            take_lines(
+                                rx.map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
+                                    .map(move |lines| {
+                                        let query_state_holder4 = Arc::clone(&query_state_holder3);
+                                        let read_state_holder = query_state_holder4.read().unwrap();
+                                        let q = &read_state_holder.query_parsing[query_index].0;
+                                        let q_parse =
+                                            &read_state_holder.query_parsing[query_index].1;
+                                        lines
+                                            .into_iter()
+                                            .filter_map(|line| {
+                                                evaluate_query_on_line(&q, &q_parse, line)
+                                                //                                                Some(line)
+                                            })
+                                            .collect::<Vec<String>>()
+                                    }),
+                                limit,
+                            )
                         })
                         .flatten()
-                        .map(|s| Chunk::from(s));
+                        .map(|s: Vec<String>| Chunk::from(s.join("\n") + &"\n"));
                     Ok(Response::new(Body::wrap_stream(body_str)))
                 }),
         )
@@ -820,8 +831,12 @@ fn mk_output_line(
     query_data: &QueryParsing,
     line: String,
 ) -> Option<String> {
+    // clean line
+    //    if line.ends_with('\n') {
+    //        let line = line[0..line.len() - 2].to_string();
+    //    }
     if query_data.read_all {
-        Some(line + &"\n")
+        Some(line)
     } else {
         // build the result iterate over the ordered resulting
         // projections
