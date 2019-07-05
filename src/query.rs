@@ -258,61 +258,21 @@ impl Query {
                             // For each datastore in the log we are going to spawn a task to read the
                             // logs stored in given datastore.
                             for i in 0..logs_ds_len {
-                                let cfg = Arc::clone(&cfg);
-                                let query_state_holder = Arc::clone(&query_state_holder);
+                                let cfg2 = Arc::clone(&cfg);
+                                let query_state_holder2 = Arc::clone(&query_state_holder);
                                 let tx = tx.clone();
                                 // Task that will read all the logs for a given datastore
                                 let task = stream::iter_ok(i..i + 1)
                                     .map(move |log_ds_index| {
-                                        let cfg_read = cfg.read().unwrap();
-                                        let read_state_holder = query_state_holder.read().unwrap();
-
-                                        let q_parse =
-                                            &read_state_holder.query_parsing[query_index].1;
-                                        let log = cfg_read.get_log(&q_parse.log_name).unwrap();
-
-                                        let ds_name = &log.datastores[log_ds_index];
-
-                                        let log_name = cfg
-                                            .read()
-                                            .unwrap()
-                                            .get_log(&q_parse.log_name)
-                                            .unwrap()
-                                            .name
-                                            .clone()
-                                            .unwrap();
-                                        // validation should make this unwrapping safe
-                                        let ds = cfg_read.datastore.get(ds_name.as_str()).unwrap();
-
-                                        let cfg2 = Arc::clone(&cfg);
-                                        let query_state_holder2 = Arc::clone(&query_state_holder);
-
-                                        // Returns Result<(ds, files), error>. Need to stop on error.
-                                        // TODO: Stop on error
-                                        list_msl_bucket_files(log_name.as_str(), &ds)
-                                            .map(move |obj_key| {
-                                                (query_index.clone(), log_ds_index.clone(), obj_key)
-                                            })
-                                            .map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
-                                            .map(move |(query_index, log_ds_index, obj_key)| {
-                                                // TODO: Limit the number of results
-                                                let read_state_holder =
-                                                    query_state_holder2.read().unwrap();
-                                                let q_parse =
-                                                    &read_state_holder.query_parsing[query_index].1;
-
-                                                let cfg_read = cfg2.read().unwrap();
-                                                let log =
-                                                    cfg_read.get_log(&q_parse.log_name).unwrap();
-
-                                                let ds_name = &log.datastores[log_ds_index];
-                                                let ds = cfg_read.datastore.get(ds_name).unwrap();
-
-                                                read_file_line_by_line(&obj_key, &ds).map_err(|e| {
-                                                    QueryError::Underlying(format!("{:?}", e))
-                                                })
-                                            })
-                                            .flatten()
+                                        let cfg2 = Arc::clone(&cfg2);
+                                        let query_state_holder2 = Arc::clone(&query_state_holder2);
+                                        // let log_ds_index = log_ds_index.clone();
+                                        Query::read_logs_from_datastore(
+                                            cfg2,
+                                            query_state_holder2,
+                                            query_index,
+                                            log_ds_index,
+                                        )
                                     })
                                     .flatten()
                                     .fold(tx, |tx, lines| {
@@ -554,6 +514,55 @@ impl Query {
         ast.into_iter()
             .map(|q| self.process_statement(&access_token, q))
             .collect()
+    }
+
+    /// Reads all the log files for a given `QueryParse` in marked `DataSource`
+    fn read_logs_from_datastore(
+        cfg: Arc<RwLock<Config>>,
+        query_state_holder: Arc<RwLock<StateHolder>>,
+        query_index: usize,
+        log_ds_index: usize,
+    ) -> impl Stream<Item = Vec<String>, Error = QueryError> {
+        let cfg_read = cfg.read().unwrap();
+        let read_state_holder = query_state_holder.read().unwrap();
+
+        // Get the `QueryParse` and the `Log` from the indexes provided
+        let q_parse = &read_state_holder.query_parsing[query_index].1;
+        let log = cfg_read.get_log(&q_parse.log_name).unwrap();
+
+        let ds_name = &log.datastores[log_ds_index];
+
+        let log_name = cfg
+            .read()
+            .unwrap()
+            .get_log(&q_parse.log_name)
+            .unwrap()
+            .name
+            .clone()
+            .unwrap();
+        // validation should make this unwrapping safe
+        let ds = cfg_read.datastore.get(ds_name.as_str()).unwrap();
+        let cfg2 = Arc::clone(&cfg);
+        let query_state_holder2 = Arc::clone(&query_state_holder);
+        // Returns Result<(ds, files), error>. Need to stop on error.
+        // TODO: Stop on error
+        list_msl_bucket_files(log_name.as_str(), &ds)
+            .map(move |obj_key| (query_index.clone(), log_ds_index.clone(), obj_key))
+            .map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
+            .map(move |(query_index, log_ds_index, obj_key)| {
+                let read_state_holder = query_state_holder2.read().unwrap();
+                let q_parse = &read_state_holder.query_parsing[query_index].1;
+
+                let cfg_read = cfg2.read().unwrap();
+                let log = cfg_read.get_log(&q_parse.log_name).unwrap();
+
+                let ds_name = &log.datastores[log_ds_index];
+                let ds = cfg_read.datastore.get(ds_name).unwrap();
+
+                read_file_line_by_line(&obj_key, &ds)
+                    .map_err(|e| QueryError::Underlying(format!("{:?}", e)))
+            })
+            .flatten()
     }
 }
 
