@@ -17,9 +17,8 @@ pub fn take_lines<S: Stream>(stream: S, amt: u64) -> LineTaker<S> {
     self::new(stream, amt)
 }
 
-/// A stream combinator which returns a maximum number of elements.
-///
-/// This structure is produced by the `Stream::LineTaker` method.
+/// A stream combinator which returns a maximum number of elements across multiple batches of
+/// elements.
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
 pub struct LineTaker<S> {
