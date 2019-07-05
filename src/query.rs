@@ -45,7 +45,7 @@ use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::http::{return_400, return_401};
-use crate::line_taker::take_lines;
+use crate::line_taker::TakeLines;
 use crate::storage::{list_msl_bucket_files, read_file_line_by_line};
 
 bitflags! {
@@ -283,24 +283,22 @@ impl Query {
                                     .map(|_| ());
                                 tokio::spawn(task);
                             }
-                            take_lines(
-                                rx.map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
-                                    .map(move |lines| {
-                                        let query_state_holder4 = Arc::clone(&query_state_holder3);
-                                        let read_state_holder = query_state_holder4.read().unwrap();
-                                        let q = &read_state_holder.query_parsing[query_index].0;
-                                        let q_parse =
-                                            &read_state_holder.query_parsing[query_index].1;
-                                        lines
-                                            .into_iter()
-                                            .filter_map(|line| {
-                                                evaluate_query_on_line(&q, &q_parse, line)
-                                                //                                                Some(line)
-                                            })
-                                            .collect::<Vec<String>>()
-                                    }),
-                                limit,
-                            )
+
+                            rx.map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
+                                .map(move |lines| {
+                                    let query_state_holder4 = Arc::clone(&query_state_holder3);
+                                    let read_state_holder = query_state_holder4.read().unwrap();
+                                    let q = &read_state_holder.query_parsing[query_index].0;
+                                    let q_parse = &read_state_holder.query_parsing[query_index].1;
+                                    lines
+                                        .into_iter()
+                                        .filter_map(|line| {
+                                            evaluate_query_on_line(&q, &q_parse, line)
+                                            //                                                Some(line)
+                                        })
+                                        .collect::<Vec<String>>()
+                                })
+                                .take_lines(limit)
                         })
                         .flatten()
                         .map(|s: Vec<String>| Chunk::from(s.join("\n") + &"\n"));

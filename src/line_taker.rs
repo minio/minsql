@@ -1,4 +1,4 @@
-use futures::StartSend;
+use futures::{stream, StartSend};
 use std::ops::Deref;
 use tokio::prelude::{Async, Poll, Sink, Stream};
 
@@ -13,8 +13,22 @@ macro_rules! try_ready {
     };
 }
 
-pub fn take_lines<S: Stream>(stream: S, amt: u64) -> LineTaker<S> {
-    self::new(stream, amt)
+pub trait TakeLines {
+    fn take_lines(self, amt: u64) -> LineTaker<Self>
+    where
+        Self: Sized;
+}
+
+impl<S: Stream, F, U> TakeLines for stream::Map<S, F>
+where
+    F: FnMut(S::Item) -> U,
+{
+    fn take_lines(self, amt: u64) -> LineTaker<Self>
+    where
+        Self: Sized,
+    {
+        self::new(self, amt)
+    }
 }
 
 /// A stream combinator which returns a maximum number of elements across multiple batches of
