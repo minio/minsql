@@ -37,13 +37,13 @@ use crate::ingest::{Ingest, IngestBuffer};
 use crate::meta::Meta;
 
 mod auth;
+mod combinators;
 mod config;
 mod constants;
 mod dialect;
 mod filter;
 mod http;
 mod ingest;
-mod line_taker;
 mod meta;
 mod query;
 mod storage;

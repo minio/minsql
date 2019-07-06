@@ -34,6 +34,7 @@ use bitflags::bitflags;
 use lazy_static::lazy_static;
 
 use crate::auth::Auth;
+use crate::combinators::take_from_iterable::TakeFromIterable;
 use crate::config::Config;
 use crate::constants::SF_DATE;
 use crate::constants::SF_EMAIL;
@@ -45,7 +46,6 @@ use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::http::{return_400, return_401};
-use crate::line_taker::TakeFromIterable;
 use crate::storage::{list_msl_bucket_files, read_file_line_by_line};
 
 bitflags! {
