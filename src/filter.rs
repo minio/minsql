@@ -322,7 +322,7 @@ mod filter_tests {
 
     #[test]
     fn invalid_identifier_from_ast_node() {
-        let ast_node = Expr::SQLWildcard;
+        let ast_node = Expr::Wildcard;
         let identifier = get_identifier_from_ast(&ast_node);
         assert_eq!(identifier, None);
     }
