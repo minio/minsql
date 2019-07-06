@@ -45,7 +45,7 @@ use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::http::{return_400, return_401};
-use crate::line_taker::TakeLines;
+use crate::line_taker::TakeFromIterable;
 use crate::storage::{list_msl_bucket_files, read_file_line_by_line};
 
 bitflags! {
@@ -298,7 +298,7 @@ impl Query {
                                         })
                                         .collect::<Vec<String>>()
                                 })
-                                .take_lines(limit)
+                                .take_from_iterable(limit)
                         })
                         .flatten()
                         .map(|s: Vec<String>| Chunk::from(s.join("\n") + &"\n"));

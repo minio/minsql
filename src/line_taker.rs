@@ -13,17 +13,17 @@ macro_rules! try_ready {
     };
 }
 
-pub trait TakeLines {
-    fn take_lines(self, amt: u64) -> LineTaker<Self>
+pub trait TakeFromIterable {
+    fn take_from_iterable(self, amt: u64) -> IterableTaker<Self>
     where
         Self: Sized;
 }
 
-impl<S: Stream, F, U> TakeLines for stream::Map<S, F>
+impl<S: Stream, F, U> TakeFromIterable for stream::Map<S, F>
 where
     F: FnMut(S::Item) -> U,
 {
-    fn take_lines(self, amt: u64) -> LineTaker<Self>
+    fn take_from_iterable(self, amt: u64) -> IterableTaker<Self>
     where
         Self: Sized,
     {
@@ -35,23 +35,23 @@ where
 /// elements.
 #[derive(Debug)]
 #[must_use = "streams do nothing unless polled"]
-pub struct LineTaker<S> {
+pub struct IterableTaker<S> {
     stream: S,
     remaining: u64,
 }
 
-pub fn new<S>(s: S, amt: u64) -> LineTaker<S>
+pub fn new<S>(s: S, amt: u64) -> IterableTaker<S>
 where
     S: Stream,
 {
-    LineTaker {
+    IterableTaker {
         stream: s,
         remaining: amt,
     }
 }
 
 // Forwarding impl of Sink from the underlying stream
-impl<S> Sink for LineTaker<S>
+impl<S> Sink for IterableTaker<S>
 where
     S: Sink + Stream,
 {
@@ -71,7 +71,7 @@ where
     }
 }
 
-impl<S, T> Stream for LineTaker<S>
+impl<S, T> Stream for IterableTaker<S>
 where
     S: Stream,
     S::Item: Deref<Target = [T]>,
