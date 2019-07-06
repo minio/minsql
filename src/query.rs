@@ -25,9 +25,9 @@ use futures::{stream, Future, Stream};
 use hyper::{Body, Chunk, Request, Response};
 use log::{error, info};
 use regex::Regex;
-use sqlparser::sqlast::{ASTNode, SQLBinaryOperator, SQLStatement};
-use sqlparser::sqlparser::Parser;
-use sqlparser::sqlparser::ParserError;
+use sqlparser::ast::{BinaryOperator, Expr, SelectItem, SetExpr, Statement, Value};
+use sqlparser::parser::Parser;
+use sqlparser::parser::ParserError;
 use tokio::sync::mpsc;
 
 use bitflags::bitflags;
@@ -124,7 +124,7 @@ impl Query {
         Query { config: cfg }
     }
 
-    pub fn parse_query(&self, payload: String) -> Result<Vec<SQLStatement>, GenericError> {
+    pub fn parse_query(&self, payload: String) -> Result<Vec<Statement>, GenericError> {
         // attempt to parse the payload
         let dialect = MinSQLDialect {};
 
@@ -146,18 +146,16 @@ impl Query {
         }
     }
 
-    pub fn validate_logs(&self, ast: &Vec<SQLStatement>) -> Option<GenericError> {
+    pub fn validate_logs(&self, ast: &Vec<Statement>) -> Option<GenericError> {
         let cfg = self.config.read().unwrap();
         // Validate all the tables for all the  queries, we don't want to start serving content
         // for the first query and then discover subsequent queries are invalid
         for query in ast {
             // find the table they want to query
             let some_table = match query {
-                sqlparser::sqlast::SQLStatement::SQLQuery(q) => match q.body {
+                Statement::Query(q) => match q.body {
                     // TODO: Validate a single table
-                    sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                        Some(bodyselect.from[0].relation.clone())
-                    }
+                    SetExpr::Select(ref bodyselect) => Some(bodyselect.from[0].relation.clone()),
                     _ => None,
                 },
                 _ => {
@@ -310,17 +308,17 @@ impl Query {
     fn process_statement(
         &self,
         access_token: &String,
-        query: SQLStatement,
-    ) -> Result<(SQLStatement, QueryParsing), ProcessingQueryError> {
+        query: Statement,
+    ) -> Result<(Statement, QueryParsing), ProcessingQueryError> {
         lazy_static! {
             static ref SMART_FIELDS_RE: Regex =
                 Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
         };
         // find the table they want to query
         let some_table = match query {
-            sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => {
+            Statement::Query(ref q) => {
                 match q.body {
-                    sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                    SetExpr::Select(ref bodyselect) => {
                         // TODO: Validate a single table
                         Some(bodyselect.from[0].relation.clone())
                     }
@@ -353,11 +351,11 @@ impl Query {
 
         // determine our read strategy
         let read_all = match query {
-            sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => match q.body {
-                sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+            Statement::Query(ref q) => match q.body {
+                SetExpr::Select(ref bodyselect) => {
                     let mut is_wildcard = false;
                     for projection in &bodyselect.projection {
-                        if *projection == sqlparser::sqlast::SQLSelectItem::Wildcard {
+                        if *projection == SelectItem::Wildcard {
                             is_wildcard = true
                         }
                     }
@@ -369,11 +367,9 @@ impl Query {
         };
 
         let projections = match query {
-            sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => {
+            Statement::Query(ref q) => {
                 match q.body {
-                    sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
-                        bodyselect.projection.clone()
-                    }
+                    SetExpr::Select(ref bodyselect) => bodyselect.projection.clone(),
                     _ => {
                         Vec::new() //return empty
                     }
@@ -391,10 +387,10 @@ impl Query {
         // TODO: We should stream the data out as it becomes available to save memory
         for proj in &projections {
             match proj {
-                sqlparser::sqlast::SQLSelectItem::UnnamedExpression(ref ast) => {
+                SelectItem::UnnamedExpr(ref ast) => {
                     // we have an identifier
                     match ast {
-                        ASTNode::SQLIdentifier(ref identifier) => {
+                        Expr::Identifier(ref identifier) => {
                             let id_name = &identifier[1..];
                             let position = match id_name.parse::<i32>() {
                                 Ok(p) => p,
@@ -441,9 +437,9 @@ impl Query {
 
         // see which fields in the conditions were not requested in the projections and extract them too
         let limit = match query {
-            sqlparser::sqlast::SQLStatement::SQLQuery(ref q) => {
+            Statement::Query(ref q) => {
                 match q.body {
-                    sqlparser::sqlast::SQLSetExpr::Select(ref bodyselect) => {
+                    SetExpr::Select(ref bodyselect) => {
                         for slct in &bodyselect.selection {
                             process_fields_for_ast(
                                 slct,
@@ -457,8 +453,8 @@ impl Query {
                 }
                 match &q.limit {
                     Some(limit_node) => match limit_node {
-                        ASTNode::SQLValue(val) => match val {
-                            sqlparser::sqlast::Value::Long(l) => Some(l.clone()),
+                        Expr::Value(val) => match val {
+                            Value::Long(l) => Some(l.clone()),
                             _ => None,
                         },
                         _ => None,
@@ -507,8 +503,8 @@ impl Query {
     pub fn process_sql(
         &self,
         access_token: &String,
-        ast: Vec<SQLStatement>,
-    ) -> Result<Vec<(SQLStatement, QueryParsing)>, ProcessingQueryError> {
+        ast: Vec<Statement>,
+    ) -> Result<Vec<(Statement, QueryParsing)>, ProcessingQueryError> {
         ast.into_iter()
             .map(|q| self.process_statement(&access_token, q))
             .collect()
@@ -565,7 +561,7 @@ impl Query {
 }
 
 fn process_fields_for_ast(
-    ast_node: &ASTNode,
+    ast_node: &Expr,
     positional_fields: &mut Vec<PositionalColumn>,
     smart_fields: &mut Vec<SmartColumn>,
     smart_fields_set: &mut HashSet<String>,
@@ -575,7 +571,7 @@ fn process_fields_for_ast(
             Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
     };
     match ast_node {
-        ASTNode::SQLNested(nested_ast) => {
+        Expr::Nested(nested_ast) => {
             process_fields_for_ast(
                 nested_ast,
                 positional_fields,
@@ -583,9 +579,9 @@ fn process_fields_for_ast(
                 smart_fields_set,
             );
         }
-        ASTNode::SQLIsNotNull(ast) => {
+        Expr::IsNotNull(ast) => {
             let identifier = match **ast {
-                ASTNode::SQLIdentifier(ref identifier) => identifier.to_string(),
+                Expr::Identifier(ref identifier) => identifier.to_string(),
                 _ => {
                     // TODO: Should we be retunring anything at all?
                     "".to_string()
@@ -626,9 +622,9 @@ fn process_fields_for_ast(
                 }
             }
         }
-        ASTNode::SQLIsNull(ast) => {
+        Expr::IsNull(ast) => {
             let identifier = match **ast {
-                ASTNode::SQLIdentifier(ref identifier) => identifier.to_string(),
+                Expr::Identifier(ref identifier) => identifier.to_string(),
                 _ => {
                     // TODO: Should we be retunring anything at all?
                     "".to_string()
@@ -669,9 +665,9 @@ fn process_fields_for_ast(
                 }
             }
         }
-        ASTNode::SQLBinaryOp { left, op, right } => {
+        Expr::BinaryOp { left, op, right } => {
             match op {
-                SQLBinaryOperator::And => {
+                BinaryOperator::And => {
                     process_fields_for_ast(left, positional_fields, smart_fields, smart_fields_set);
                     process_fields_for_ast(
                         right,
@@ -680,7 +676,7 @@ fn process_fields_for_ast(
                         smart_fields_set,
                     );
                 }
-                SQLBinaryOperator::Or => {
+                BinaryOperator::Or => {
                     process_fields_for_ast(left, positional_fields, smart_fields, smart_fields_set);
                     process_fields_for_ast(
                         right,
@@ -880,7 +876,7 @@ fn mk_output_line(
 }
 
 fn evaluate_query_on_line(
-    query: &SQLStatement,
+    query: &Statement,
     query_data: &QueryParsing,
     line: String,
 ) -> Option<String> {
@@ -941,7 +937,7 @@ pub enum ProcessingQueryError {
 }
 
 struct StateHolder {
-    query_parsing: Vec<(SQLStatement, QueryParsing)>,
+    query_parsing: Vec<(Statement, QueryParsing)>,
 }
 
 impl StateHolder {
