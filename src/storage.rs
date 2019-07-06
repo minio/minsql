@@ -279,7 +279,7 @@ pub enum GetObjectError {
 pub fn read_file_line_by_line(
     key: &String,
     datastore: &DataStore,
-) -> impl Stream<Item = String, Error = StorageError<GetObjectError>> {
+) -> impl Stream<Item = Vec<String>, Error = StorageError<GetObjectError>> {
     let s3_client = client_for_datastore(datastore);
     s3_client
         .get_object(GetObjectRequest {
@@ -299,6 +299,7 @@ pub fn read_file_line_by_line(
                 // max line length of 1MiB
                 LinesCodec::new_with_max_length(1024 * 1024),
             )
+            .chunks(4096)
             .map_err(|e| StorageError::Operation(GetObjectError::IOError(format!("{:?}", e))))
         })
         .flatten_stream()

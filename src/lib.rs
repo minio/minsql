@@ -37,6 +37,7 @@ use crate::ingest::{Ingest, IngestBuffer};
 use crate::meta::Meta;
 
 mod auth;
+mod combinators;
 mod config;
 mod constants;
 mod dialect;
