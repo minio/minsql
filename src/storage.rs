@@ -37,6 +37,7 @@ use tokio_codec::{FramedRead, LinesCodec};
 use uuid::Uuid;
 
 use crate::config::{Config, DataStore};
+use bytes::Bytes;
 
 #[derive(Debug)]
 pub enum StorageError<E> {
@@ -205,7 +206,7 @@ pub fn write_to_datastore(
     );
     let destination = format!("minsql/{}", target_file);
     // turn the payload into a streaming body
-    let stream_of_bytes = stream::iter_ok(payload).map(|s| s.into_bytes());
+    let stream_of_bytes = stream::iter_ok(payload).map(|s| Bytes::from(s.into_bytes()));
     let streaming_body = rusoto_s3::StreamingBody::new(stream_of_bytes);
     // save the payload
     // TODO: Make this function return a stream so we can switch to an async response and not block
