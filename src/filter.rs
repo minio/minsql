@@ -17,7 +17,6 @@ use std::collections::HashMap;
 
 use log::info;
 use sqlparser::ast::{BinaryOperator, Expr, SetExpr, Statement, Value};
-//use {Expr, BinaryOperator, SetExpr, Statement};
 
 pub fn line_fails_query_conditions(
     line: &String,
