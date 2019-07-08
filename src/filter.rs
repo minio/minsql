@@ -16,15 +16,15 @@
 use std::collections::HashMap;
 
 use log::info;
-use sqlparser::sqlast::{ASTNode, SQLBinaryOperator, SQLSetExpr, SQLStatement};
+use sqlparser::ast::{BinaryOperator, Expr, SetExpr, Statement, Value};
 
 pub fn line_fails_query_conditions(
     line: &String,
-    query: &SQLStatement,
+    query: &Statement,
     projection_values: &HashMap<String, Option<String>>,
 ) -> bool {
-    if let SQLStatement::SQLQuery(ref q) = query {
-        if let SQLSetExpr::Select(ref select) = q.body {
+    if let Statement::Query(ref q) = query {
+        if let SetExpr::Select(ref select) = q.body {
             if let Some(selection) = &select.selection {
                 let all_conditions_pass = evaluate(&selection, projection_values, line);
                 return !all_conditions_pass; // skip if not all conditions pass
@@ -35,18 +35,18 @@ pub fn line_fails_query_conditions(
     false // otherwise, don't skip line
 }
 
-/// Evalates a single line against the filtering logic stated by the provided `ASTNode` and returns
+/// Evalates a single line against the filtering logic stated by the provided `Expr` and returns
 /// whether the line passes the conditions or fails them.
 pub fn evaluate(
-    ast_node: &ASTNode,
+    ast_node: &Expr,
     projection_values: &HashMap<String, Option<String>>,
     line: &String,
 ) -> bool {
     match ast_node {
-        ASTNode::SQLNested(nested_ast) => {
+        Expr::Nested(nested_ast) => {
             return evaluate(&nested_ast, projection_values, line);
         }
-        ASTNode::SQLIsNotNull(ast) => {
+        Expr::IsNotNull(ast) => {
             let identifier = match get_identifier_from_ast(&ast) {
                 Some(v) => v,
                 None => {
@@ -61,7 +61,7 @@ pub fn evaluate(
             }
             return true;
         }
-        ASTNode::SQLIsNull(ast) => {
+        Expr::IsNull(ast) => {
             let identifier = match get_identifier_from_ast(&ast) {
                 Some(v) => v,
                 None => {
@@ -74,20 +74,20 @@ pub fn evaluate(
             }
             return true;
         }
-        ASTNode::SQLBinaryOp { left, op, right } => {
+        Expr::BinaryOp { left, op, right } => {
             let identifier = left.to_string();
             match op {
-                SQLBinaryOperator::And => {
+                BinaryOperator::And => {
                     let left_eval = evaluate(&left, projection_values, line);
                     let right_eval = evaluate(&right, projection_values, line);
                     return left_eval && right_eval;
                 }
-                SQLBinaryOperator::Or => {
+                BinaryOperator::Or => {
                     let left_eval = evaluate(&left, projection_values, line);
                     let right_eval = evaluate(&right, projection_values, line);
                     return left_eval || right_eval;
                 }
-                SQLBinaryOperator::Eq => {
+                BinaryOperator::Eq => {
                     if identifier != "$line"
                         && projection_values.contains_key(&identifier[..]) == false
                     {
@@ -96,7 +96,7 @@ pub fn evaluate(
 
                     // TODO: Optimize this op_value preparation, don't do it in the loop
                     let op_value = match **right {
-                        ASTNode::SQLIdentifier(ref right_value) => {
+                        Expr::Identifier(ref right_value) => {
                             // Did they used double quotes for the value?
                             let mut str_id = right_value.to_string();
                             if str_id.starts_with("\"") {
@@ -104,8 +104,8 @@ pub fn evaluate(
                             }
                             str_id
                         }
-                        ASTNode::SQLValue(ref right_value) => match right_value {
-                            sqlparser::sqlast::Value::SingleQuotedString(s) => s.to_string(),
+                        Expr::Value(ref right_value) => match right_value {
+                            Value::SingleQuotedString(s) => s.to_string(),
                             _ => right_value.to_string(),
                         },
                         _ => "".to_string(),
@@ -117,7 +117,7 @@ pub fn evaluate(
                         return false;
                     }
                 }
-                SQLBinaryOperator::NotEq => {
+                BinaryOperator::NotEq => {
                     if identifier != "$line"
                         && projection_values.contains_key(&identifier[..]) == false
                     {
@@ -125,7 +125,7 @@ pub fn evaluate(
                     }
                     // TODO: Optimize this op_value preparation, don't do it in the loop
                     let op_value = match **right {
-                        ASTNode::SQLIdentifier(ref right_value) => {
+                        Expr::Identifier(ref right_value) => {
                             // Did they used double quotes for the value?
                             let mut str_id = right_value.to_string();
                             if str_id.starts_with("\"") {
@@ -133,8 +133,8 @@ pub fn evaluate(
                             }
                             str_id
                         }
-                        ASTNode::SQLValue(ref right_value) => match right_value {
-                            sqlparser::sqlast::Value::SingleQuotedString(s) => s.to_string(),
+                        Expr::Value(ref right_value) => match right_value {
+                            Value::SingleQuotedString(s) => s.to_string(),
                             _ => right_value.to_string(),
                         },
                         _ => "".to_string(),
@@ -145,7 +145,7 @@ pub fn evaluate(
                         return false;
                     }
                 }
-                SQLBinaryOperator::Like => {
+                BinaryOperator::Like => {
                     if identifier != "$line"
                         && projection_values.contains_key(&identifier[..]) == false
                     {
@@ -153,7 +153,7 @@ pub fn evaluate(
                     }
                     // TODO: Optimize this op_value preparation, don't do it in the loop
                     let op_value = match **right {
-                        ASTNode::SQLIdentifier(ref right_value) => {
+                        Expr::Identifier(ref right_value) => {
                             // Did they used double quotes for the value?
                             let mut str_id = right_value.to_string();
                             if str_id.starts_with("\"") {
@@ -161,8 +161,8 @@ pub fn evaluate(
                             }
                             str_id
                         }
-                        ASTNode::SQLValue(ref right_value) => match right_value {
-                            sqlparser::sqlast::Value::SingleQuotedString(s) => s.to_string(),
+                        Expr::Value(ref right_value) => match right_value {
+                            Value::SingleQuotedString(s) => s.to_string(),
                             _ => right_value.to_string(),
                         },
                         _ => "".to_string(),
@@ -178,7 +178,7 @@ pub fn evaluate(
                         }
                     }
                 }
-                SQLBinaryOperator::NotLike => {
+                BinaryOperator::NotLike => {
                     if identifier != "$line"
                         && projection_values.contains_key(&identifier[..]) == false
                     {
@@ -186,7 +186,7 @@ pub fn evaluate(
                     }
                     // TODO: Optimize this op_value preparation, don't do it in the loop
                     let op_value = match **right {
-                        ASTNode::SQLIdentifier(ref right_value) => {
+                        Expr::Identifier(ref right_value) => {
                             // Did they used double quotes for the value?
                             let mut str_id = right_value.to_string();
                             if str_id.starts_with("\"") {
@@ -194,8 +194,8 @@ pub fn evaluate(
                             }
                             str_id
                         }
-                        ASTNode::SQLValue(ref right_value) => match right_value {
-                            sqlparser::sqlast::Value::SingleQuotedString(s) => s.to_string(),
+                        Expr::Value(ref right_value) => match right_value {
+                            Value::SingleQuotedString(s) => s.to_string(),
                             _ => right_value.to_string(),
                         },
                         _ => "".to_string(),
@@ -224,9 +224,9 @@ pub fn evaluate(
     };
 }
 
-/// Extracts an `ASTNode` identifier as a `String`
-pub fn get_identifier_from_ast(ast: &ASTNode) -> Option<String> {
-    if let ASTNode::SQLIdentifier(ref id) = ast {
+/// Extracts an `Expr` identifier as a `String`
+pub fn get_identifier_from_ast(ast: &Expr) -> Option<String> {
+    if let Expr::Identifier(ref id) = ast {
         Some(id.to_string())
     } else {
         None
@@ -281,7 +281,7 @@ mod filter_tests {
     fn setup_select(
         query_stmt: String,
         line: &String,
-    ) -> (SQLStatement, HashMap<String, Option<String>>) {
+    ) -> (Statement, HashMap<String, Option<String>>) {
         let access_token = "TOKEN1".to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
@@ -314,14 +314,14 @@ mod filter_tests {
 
     #[test]
     fn get_identifier_from_ast_node() {
-        let ast_node = ASTNode::SQLIdentifier("test_id".to_owned());
+        let ast_node = Expr::Identifier("test_id".to_owned());
         let identifier = get_identifier_from_ast(&ast_node);
         assert_eq!(identifier, Some("test_id".to_string()));
     }
 
     #[test]
     fn invalid_identifier_from_ast_node() {
-        let ast_node = ASTNode::SQLWildcard;
+        let ast_node = Expr::Wildcard;
         let identifier = get_identifier_from_ast(&ast_node);
         assert_eq!(identifier, None);
     }
