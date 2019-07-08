@@ -119,7 +119,7 @@ impl Meta {
                                         ()
                                     })
                                     .map(move |bytes| {
-                                        let result = String::from_utf8(bytes).unwrap();
+                                        let result = String::from_utf8(bytes.to_vec()).unwrap();
                                         let parts: Vec<&str> = file_key_clone
                                             .trim_start_matches("minsql/meta/")
                                             .split("/")
