@@ -39,17 +39,8 @@ impl Meta {
 
     /// Scans the metabucket for configuration files and loads them into the shared state `Config`
     pub fn load_config_from_metabucket(&self) -> impl Future<Item = (), Error = ()> {
-        let read_cfg = self.config.read().unwrap();
         // validate access to the metadata store
-        // Represent the metabucket as a datastore to re-use other functions we have in `storage.rs`
-        let ds = DataStore {
-            endpoint: read_cfg.server.metadata_endpoint.clone(),
-            access_key: read_cfg.server.access_key.clone(),
-            secret_key: read_cfg.server.secret_key.clone(),
-            bucket: read_cfg.server.metadata_bucket.clone(),
-            prefix: "".to_owned(),
-            name: Some("metabucket".to_owned()),
-        };
+        let ds = ds_for_metabucket(Arc::clone(&self.config));
         match storage::can_reach_datastore(&ds) {
             Ok(true) => (),
             Ok(false) => {
@@ -85,7 +76,10 @@ impl Meta {
                 prefix: Some("minsql/meta/".to_owned()),
                 ..Default::default()
             })
-            .map(|list_objects| list_objects.contents.unwrap())
+            .map(|list_objects| match list_objects.contents {
+                Some(v) => v,
+                None => Vec::new(),
+            })
             .map_err(|_| ())
             .and_then(|objects| {
                 // For each objects, get_object, filter out system files
@@ -177,6 +171,20 @@ impl Meta {
             })
             .map(|_| ());
         task
+    }
+}
+
+pub fn ds_for_metabucket(cfg: Arc<RwLock<Config>>) -> DataStore {
+    // TODO: Maybe cache this on cfg.server
+    let read_cfg = cfg.read().unwrap();
+    // Represent the metabucket as a datastore to re-use other functions we have in `storage.rs`
+    DataStore {
+        endpoint: read_cfg.server.metadata_endpoint.clone(),
+        access_key: read_cfg.server.access_key.clone(),
+        secret_key: read_cfg.server.secret_key.clone(),
+        bucket: read_cfg.server.metadata_bucket.clone(),
+        prefix: "".to_owned(),
+        name: Some("metabucket".to_owned()),
     }
 }
 

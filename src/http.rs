@@ -18,20 +18,22 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use futures::{future, Future};
-use hyper::{header, Body, Method, Request, Response, StatusCode};
+use hyper::{Body, Method, Request, Response, StatusCode};
 use log::info;
 
+use crate::api::Api;
 use crate::auth::Auth;
 use crate::config::Config;
 use crate::ingest::{Ingest, IngestBuffer};
 use crate::query::Query;
+use serde_derive::Serialize;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type ResponseFuture = Box<Future<Item = Response<Body>, Error = GenericError> + Send>;
 
 static INDEX_BODY: &[u8] = b"MinSQL";
-static NOTFOUND_BODY: &[u8] = b"Not Found";
-static UNAUTHORIZED_BODY: &[u8] = b"Unauthorized";
+static NOTFOUND_BODY: &str = "Not Found";
+static UNAUTHORIZED_BODY: &str = "Unauthorized";
 
 pub struct Http {
     config: Arc<RwLock<Config>>,
@@ -48,13 +50,23 @@ impl Http {
         log_ingest_buffers: Arc<HashMap<String, Mutex<IngestBuffer>>>,
     ) -> ResponseFuture {
         let cfg = self.config.read().unwrap();
-        match (req.method(), req.uri().path()) {
-            (&Method::GET, "/") => {
+
+        let request_path_no_slash = String::from(&req.uri().path()[1..]);
+        // Index 0 indicates wether they want an API
+        let parts: Vec<&str> = request_path_no_slash.split("/").collect();
+
+        match (req.method(), req.uri().path(), parts.get(0)) {
+            // delegate anything starting with /api/ to the api router
+            (_, _, Some(&"api")) => {
+                let api = Api::new(Arc::clone(&self.config));
+                api.router(req, parts)
+            }
+            (&Method::GET, "/", _) => {
                 let body = Body::from(INDEX_BODY);
                 Box::new(future::ok(Response::new(body)))
             }
 
-            (&Method::POST, "/search") => match self.extract_auth_token(&req) {
+            (&Method::POST, "/search", _) => match self.extract_auth_token(&req) {
                 Ok(tok) => {
                     let cfg = Arc::clone(&self.config);
                     let query_c = Query::new(cfg);
@@ -63,7 +75,7 @@ impl Http {
                 Err(err_resp) => err_resp,
             },
 
-            (&Method::PUT, _pth) => {
+            (&Method::PUT, _pth, _) => {
                 match self.requested_log_from_request(&req) {
                     None => Box::new(future::ok(return_404())),
                     Some(name) => {
@@ -138,8 +150,17 @@ impl Http {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct ErrorResponse {
+    message: String,
+}
+
 pub fn return_404() -> Response<Body> {
-    let body = Body::from(NOTFOUND_BODY);
+    let obj = ErrorResponse {
+        message: NOTFOUND_BODY.to_string(),
+    };
+    let output = serde_json::to_string(&obj).unwrap();
+    let body = Body::from(output);
     Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(body)
@@ -147,7 +168,11 @@ pub fn return_404() -> Response<Body> {
 }
 
 pub fn return_401() -> Response<Body> {
-    let body = Body::from(UNAUTHORIZED_BODY);
+    let obj = ErrorResponse {
+        message: UNAUTHORIZED_BODY.to_string(),
+    };
+    let output = serde_json::to_string(&obj).unwrap();
+    let body = Body::from(output);
     Response::builder()
         .status(StatusCode::UNAUTHORIZED)
         .body(body)
@@ -155,10 +180,13 @@ pub fn return_401() -> Response<Body> {
 }
 
 pub fn return_400(message: &str) -> Response<Body> {
-    let body = Body::from(format!("Bad request: {}", &message));
+    let obj = ErrorResponse {
+        message: format!("Bad request: {}", &message),
+    };
+    let output = serde_json::to_string(&obj).unwrap();
+    let body = Body::from(output);
     Response::builder()
         .status(StatusCode::BAD_REQUEST)
-        .header(header::CONTENT_TYPE, "text/plain")
         .body(body)
         .unwrap()
 }

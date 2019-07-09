@@ -35,6 +35,7 @@ use native_tls::{Identity, TlsAcceptor};
 use tokio::net::TcpListener;
 use tokio::timer::Interval;
 
+mod api;
 mod auth;
 mod combinators;
 mod config;

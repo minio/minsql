@@ -193,7 +193,9 @@ impl Query {
                 .and_then(move |entire_body| {
                     let payload: String = match String::from_utf8(entire_body.to_vec()) {
                         Ok(str) => str,
-                        Err(err) => panic!("Couldn't convert buffer to string: {}", err),
+                        Err(_) => {
+                            return Ok(return_400("Could not understand request"));
+                        }
                     };
                     let ast = match query_c.parse_query(payload) {
                         Ok(v) => v,
