@@ -324,7 +324,7 @@ fn rand_datastore<'a>(cfg: &'a Config, log_name: &str) -> Option<&'a DataStore> 
 mod storage_tests {
     use std::collections::HashMap;
 
-    use crate::config::Log;
+    use crate::config::{Log, Server};
 
     use super::*;
 
@@ -356,8 +356,15 @@ mod storage_tests {
         );
 
         let cfg = Config {
-            version: "1".to_string(),
-            server: None,
+            server: Server {
+                address: "".to_string(),
+                metadata_endpoint: "".to_string(),
+                metadata_bucket: "".to_string(),
+                access_key: "".to_string(),
+                secret_key: "".to_string(),
+                pkcs12_cert: None,
+                pkcs12_password: None,
+            },
             datastore: datastore_map,
             log: log_map,
             auth: HashMap::new(),

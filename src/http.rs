@@ -173,7 +173,7 @@ enum HeaderToken {
 
 #[cfg(test)]
 mod http_tests {
-    use crate::config::{Config, LogAuth};
+    use crate::config::{Config, LogAuth, Server};
 
     use super::*;
 
@@ -183,7 +183,6 @@ mod http_tests {
         log_auth_map.insert(
             log_name,
             LogAuth {
-                token: token.clone(),
                 api: Vec::new(),
                 expire: "".to_string(),
                 status: "".to_string(),
@@ -194,8 +193,15 @@ mod http_tests {
         auth.insert(token.clone(), log_auth_map);
 
         Config {
-            version: "1".to_string(),
-            server: None,
+            server: Server {
+                address: "".to_string(),
+                metadata_endpoint: "".to_string(),
+                metadata_bucket: "".to_string(),
+                access_key: "".to_string(),
+                secret_key: "".to_string(),
+                pkcs12_cert: None,
+                pkcs12_password: None,
+            },
             datastore: HashMap::new(),
             log: HashMap::new(),
             auth: auth,

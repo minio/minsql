@@ -23,6 +23,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::config::Config;
+use crate::ingest::{Ingest, IngestBuffer};
+use crate::meta::Meta;
 use futures::{future, Future, Stream};
 use hyper::server::conn::Http;
 use hyper::service::service_fn;
@@ -31,10 +34,6 @@ use log::{error, info};
 use native_tls::{Identity, TlsAcceptor};
 use tokio::net::TcpListener;
 use tokio::timer::Interval;
-
-use crate::config::Config;
-use crate::ingest::{Ingest, IngestBuffer};
-use crate::meta::Meta;
 
 mod auth;
 mod combinators;
@@ -101,13 +100,7 @@ impl MinSQL {
         // create a referece to the hashmap that we will share across intervals below
         let ingest_buffer_interval = Arc::clone(&log_ingest_buffers);
 
-        let addr = self
-            .config
-            .read()
-            .unwrap()
-            .get_server_address()
-            .parse()
-            .unwrap();
+        let addr = self.config.read().unwrap().server.address.parse().unwrap();
 
         let service_cfg = Arc::clone(&self.config);
         // Hyper Service Function that will serve each request as a new task
@@ -124,12 +117,10 @@ impl MinSQL {
         };
         let read_cfg = self.config.read().unwrap();
 
-        let server_cfg = match &read_cfg.server {
-            Some(s) => s,
-            None => panic!("No server configuration in your config.toml"),
-        };
-
-        match (&server_cfg.pkcs12_cert, &server_cfg.pkcs12_password) {
+        match (
+            &read_cfg.server.pkcs12_cert,
+            &read_cfg.server.pkcs12_password,
+        ) {
             (Some(pkcs12_cert), Some(pkcs12_pass)) => {
                 // HTTPS server
                 let mut der = Vec::new();

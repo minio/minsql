@@ -834,10 +834,6 @@ fn mk_output_line(
     query_data: &QueryParsing,
     line: String,
 ) -> Option<String> {
-    // clean line
-    //    if line.ends_with('\n') {
-    //        let line = line[0..line.len() - 2].to_string();
-    //    }
     if query_data.read_all {
         Some(line)
     } else {
@@ -869,7 +865,7 @@ fn mk_output_line(
                 outstring.push_str(" ");
             }
         }
-        outstring.push_str("\n");
+        //        outstring.push_str("\n");
         // TODO: When adding CSV output, change the separator
         Some(outstring)
     }
@@ -950,7 +946,7 @@ impl StateHolder {
 
 #[cfg(test)]
 mod query_tests {
-    use crate::config::{Config, Log, LogAuth};
+    use crate::config::{Config, Log, LogAuth, Server};
 
     use super::*;
 
@@ -970,7 +966,6 @@ mod query_tests {
         log_auth_map.insert(
             log_name,
             LogAuth {
-                token: token.clone(),
                 api: Vec::new(),
                 expire: "".to_string(),
                 status: "".to_string(),
@@ -981,8 +976,15 @@ mod query_tests {
         auth.insert(token.clone(), log_auth_map);
 
         let cfg = Config {
-            version: "1".to_string(),
-            server: None,
+            server: Server {
+                address: "".to_string(),
+                metadata_endpoint: "".to_string(),
+                metadata_bucket: "".to_string(),
+                access_key: "".to_string(),
+                secret_key: "".to_string(),
+                pkcs12_cert: None,
+                pkcs12_password: None,
+            },
             datastore: HashMap::new(),
             log: log_map,
             auth: auth,

@@ -17,17 +17,16 @@
 use std::collections::HashMap;
 use std::env;
 use std::fmt;
-use std::fs;
 
 use log::error;
 use serde_derive::{Deserialize, Serialize};
 
 use crate::constants::DEFAULT_SERVER_ADDRESS;
+use clap::{App, Arg};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
-    pub version: String,
-    pub server: Option<Server>,
+    pub server: Server,
     #[serde(default = "HashMap::new")]
     pub datastore: HashMap<String, DataStore>,
     #[serde(default = "HashMap::new")]
@@ -36,9 +35,9 @@ pub struct Config {
     pub auth: HashMap<String, HashMap<String, LogAuth>>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Server {
-    pub address: Option<String>,
+    pub address: String,
     pub metadata_endpoint: String,
     pub metadata_bucket: String,
     pub access_key: String,
@@ -64,15 +63,23 @@ pub struct Log {
     pub commit_window: String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LogAuth {
-    pub token: String,
     pub api: Vec<String>,
     pub expire: String,
     pub status: String,
 }
 
 impl Config {
+    pub fn new(server: Server) -> Config {
+        Config {
+            server: server,
+            datastore: HashMap::new(),
+            log: HashMap::new(),
+            auth: HashMap::new(),
+        }
+    }
+
     pub fn get_log(&self, logname: &String) -> Option<&Log> {
         self.log.get(&logname[..])
     }
@@ -107,18 +114,6 @@ impl Config {
             _ => 0 as u64,
         }
     }
-
-    /// Returns the server address to bind, if no configuration is found it returns the default
-    /// address of 0.0.0.0:9999
-    pub fn get_server_address(&self) -> String {
-        match &self.server {
-            Some(server) => match &server.address {
-                Some(address) => address.clone(),
-                None => DEFAULT_SERVER_ADDRESS.to_owned(),
-            },
-            None => DEFAULT_SERVER_ADDRESS.to_owned(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -140,25 +135,92 @@ impl fmt::Display for ConfigurationError {
     }
 }
 
-// Loads the configuration file from command arguments or defaults to config.toml
+// Loads the configuration file from command arguments and the environment.
 pub fn load_configuration() -> Result<Config, ConfigurationError> {
     //load arguments
-    let args: Vec<String> = env::args().collect();
-    // We default to loading a config.toml if minsql is run without arguments
-    let mut filename = "config.toml";
-    if args.len() > 1 {
-        filename = args[1].as_str();
-    }
-    // try to read the file
-    let contents = match fs::read_to_string(filename) {
-        Ok(f) => f,
-        Err(_) => return Err(ConfigurationError::new("Could not read configuration file")),
+    let matches = App::new("MinSQL")
+        .version("1.0")
+        .about("Log Search Engine")
+        .arg(
+            Arg::with_name("address")
+                .takes_value(true)
+                .default_value(DEFAULT_SERVER_ADDRESS)
+                .short("a")
+                .long("address")
+                .help("Server binding address, i.e.: 0.0.0.0:9000")
+                .required(true),
+        )
+        .get_matches();
+
+    // Server address, safe to unwrap since it has a default value.
+    let address = matches.value_of("address").unwrap().to_string();
+
+    // Check for configuration on the environment, else return error.
+
+    let metadata_endpoint: String = match env::var("METABUCKET_ENDPOINT") {
+        Ok(val) => val,
+        Err(e) => {
+            return Err(ConfigurationError::new(&format!(
+                "No meta bucket endpoint environment variable `METABUCKET_ENDPOINT` set. {}",
+                e
+            )));
+        }
     };
-    // try to parse the toml string
-    let mut configuration: Config = match toml::from_str(&contents) {
-        Ok(t) => t,
-        Err(e) => return Err(ConfigurationError::new(&format!("{}", e)[..])),
+
+    let metadata_bucket: String = match env::var("METABUCKET_NAME") {
+        Ok(val) => val,
+        Err(e) => {
+            return Err(ConfigurationError::new(&format!(
+                "No meta bucket name environment variable `METABUCKET_NAME` set. {}",
+                e
+            )));
+        }
     };
+
+    let access_key: String = match env::var("METABUCKET_ACCESS_KEY") {
+        Ok(val) => val,
+        Err(e) => {
+            return Err(ConfigurationError::new(&format!(
+                "No meta bucket endpoint environment variable `METABUCKET_ACCESS_KEY` set. {}",
+                e
+            )));
+        }
+    };
+
+    let secret_key: String = match env::var("METABUCKET_SECRET_KEY") {
+        Ok(val) => val,
+        Err(e) => {
+            return Err(ConfigurationError::new(&format!(
+                "No meta bucket endpoint environment variable `METABUCKET_SECRET_KEY` set. {}",
+                e
+            )));
+        }
+    };
+
+    // Certificates are optional.
+
+    let pkcs12_cert: Option<String> = match env::var("PKCS12_CERT") {
+        Ok(val) => Some(val),
+        Err(_) => None,
+    };
+
+    let pkcs12_password: Option<String> = match env::var("PKCS12_PASSWORD") {
+        Ok(val) => Some(val),
+        Err(_) => None,
+    };
+
+    let server = Server {
+        address,
+        metadata_endpoint,
+        metadata_bucket,
+        access_key,
+        secret_key,
+        pkcs12_cert,
+        pkcs12_password,
+    };
+
+    let mut configuration = Config::new(server);
+
     // store datasource names in the structs
     for (name, ds) in &mut configuration.datastore {
         ds.name = Some(name.clone());

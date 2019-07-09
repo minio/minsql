@@ -14,28 +14,32 @@ docker build . -t minio/minsql
 
 An instance of [MinIO](https://github.com/minio/minio) is needed as the storage engine for MinSQL.
 
-To run the project you may specify a `.toml` configuration file, if none is specified *MinSQL* will attempt to look for a `config.toml` file.
+To run the project you need to provide the access details for a `Meta Bucket` to store the shared configuration between multiple `MinSQL` instances, the location and access to it should be configured via environment variables when starting MinSQL .
 
-```
-docker run -v config.toml:config.toml minio/minsql config.toml
-```
-A sample configuration file can be found at `config.toml.template`
-
-### Meta Bucket
-
-A bucket to store shared configuration across multiple `MinSQL` instances is needed, the location and access to it should be configured on the `config.toml`.
-
-````toml
-[server]
-   ...
-   metadata_bucket = "minsql-meta"
-   metadata_endpoint = "http://localhost:9000"
-   access_key = "minio"
-   secret_key = "minio123"
+##### Docker:
+````bash
+docker run -e METABUCKET_NAME='minsql-meta' -e METABUCKET_ENDPOINT='http://localhost:9000' -e ACCESS_KEY='minio' -e SECRET_KEY='minio123' minio/minlsql
 ````
 
+##### Binary:
+````bash
+   METABUCKET_NAME=minsql-meta METABUCKET_ENDPOINT=http://localhost:9000 ACCESS_KEY=minio SECRET_KEY=minio123 minsql
+````
+
+### Environment variables
+
+Environment |  Description |
+--- | --- | 
+METABUCKET_NAME | Name of the meta bucket.
+METABUCKET_ENDPOINT | Endpoint.
+ACCESS_KEY | Meta Bucket Access key
+SECRET_KEY | Meta Bucket Secret key
+PKCS12_CERT | *Optional:* location to a pcks12 certificate.
+PKCS12_PASSWORD | *Optional:* password to unlock the certificate.
+
+
 ## Storing logs
-For a log `mylog` defined on the `config.toml` we can store logs on *MinSQL* by performing a `PUT` to your `MinSQL` instance
+For a log `mylog` defined on the configuration we can store logs on *MinSQL* by performing a `PUT` to your `MinSQL` instance
 
 ```
 curl -X PUT \
