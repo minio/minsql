@@ -21,6 +21,7 @@ use futures::sink::Sink;
 use futures::stream::Stream;
 use futures::{future, Future};
 use hyper::{header, Body, Chunk, Request, Response};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -147,10 +148,6 @@ impl ViewSet for ApiDataStores {
     }
 
     fn update(&self, req: Request<Body>, pk: &str) -> ResponseFuture {
-        let read_cfg = self.config.read().unwrap();
-        if read_cfg.datastore.contains_key(pk) == false {
-            return Box::new(future::ok(return_404()));
-        }
         let pk = pk.to_string();
 
         let cfg = Arc::clone(&self.config);
@@ -165,7 +162,15 @@ impl ViewSet for ApiDataStores {
                             return Ok(return_400("Could not understand request"));
                         }
                     };
-                    let mut datastore: DataStore = match serde_json::from_str(&payload) {
+                    let read_cfg = cfg.read().unwrap();
+                    let mut current_datastore = match read_cfg.datastore.get(&pk) {
+                        Some(v) => v.clone(),
+                        None => {
+                            return Ok(return_404());
+                        }
+                    };
+
+                    let datastore: HashMap<String, String> = match serde_json::from_str(&payload) {
                         Ok(v) => v,
                         Err(_) => {
                             return Ok(return_400("Could not parse request"));
@@ -173,52 +178,80 @@ impl ViewSet for ApiDataStores {
                     };
 
                     // Validate Access/Secret
-                    if datastore.access_key == "" || datastore.secret_key == "" {
-                        return Ok(return_400("Access/Secret key cannot be empty."));
+                    if let Some(access_key) = datastore.get("access_key") {
+                        if access_key == "" {
+                            return Ok(return_400("Access key cannot be empty."));
+                        }
+                        current_datastore.access_key = access_key.clone();
+                    }
+                    if let Some(secret_key) = datastore.get("secret_key") {
+                        if secret_key == "" {
+                            return Ok(return_400("Secret key cannot be empty."));
+                        }
+                        current_datastore.secret_key = secret_key.clone();
                     }
                     // Endpoint
-                    if datastore.endpoint == "" {
-                        return Ok(return_400("Endpoint cannot be empty."));
+                    if let Some(endpoint) = datastore.get("endpoint") {
+                        if endpoint == "" {
+                            return Ok(return_400("Endpoint cannot be empty."));
+                        }
+                        current_datastore.endpoint = endpoint.clone();
                     }
+
                     // Bucket
-                    if datastore.bucket == "" {
-                        return Ok(return_400("Bucket cannot be empty."));
+                    if let Some(bucket) = datastore.get("endpoint") {
+                        if bucket == "" {
+                            return Ok(return_400("Bucket cannot be empty."));
+                        }
+                        current_datastore.bucket = bucket.clone();
+                    }
+
+                    // Prefix
+                    if let Some(prefix) = datastore.get("prefix") {
+                        current_datastore.prefix = prefix.clone();
                     }
 
                     // Validate name
-                    let mut datastore_name: String = "".to_string();
-                    if let Some(ds_name) = &datastore.name {
-                        if ds_name == "" {
+                    let mut datastore_name: Option<String> = None;
+                    if let Some(name) = datastore.get("name") {
+                        if name == "" {
                             return Ok(return_400("Datastore name cannot be empty."));
                         }
-                        datastore_name = ds_name.clone();
+                        current_datastore.name = Some(name.clone());
+                        datastore_name = Some(name.clone());
                     }
+
                     // if ds name changed, delete previous file
-                    if datastore_name != pk {
-                        let cfg = Arc::clone(&cfg);
-                        tokio::spawn({
-                            delete_object_metabucket(cfg, format!("minsql/meta/datastores/{}", pk))
+                    if let Some(ds_name) = datastore_name {
+                        if ds_name != pk {
+                            let cfg = Arc::clone(&cfg);
+                            tokio::spawn({
+                                delete_object_metabucket(
+                                    cfg,
+                                    format!("minsql/meta/datastores/{}", pk),
+                                )
                                 .map(|_| ())
                                 .map_err(|_| ())
-                        });
+                            });
+                        }
                     }
 
                     // everything seems ok, write to datastore
-                    let ds_serialized = serde_json::to_string(&datastore).unwrap();
+                    let ds_serialized = serde_json::to_string(&current_datastore).unwrap();
 
                     let (tx, rx) = unbounded_channel();
                     let cfg = Arc::clone(&cfg);
                     tokio::spawn({
                         put_object_metabucket(
                             cfg,
-                            format!("minsql/meta/datastores/{}", datastore_name),
+                            format!("minsql/meta/datastores/{}", pk),
                             ds_serialized.clone(),
                         )
                         .map_err(|_| {})
                         .and_then(move |_| {
                             //remove sensitive data
-                            datastore.safe();
-                            let ds_serialized = serde_json::to_string(&datastore).unwrap();
+                            current_datastore.safe();
+                            let ds_serialized = serde_json::to_string(&current_datastore).unwrap();
                             tx.send(ds_serialized).map_err(|_| ())
                         })
                         .map(|_| ())
