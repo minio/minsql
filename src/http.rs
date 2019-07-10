@@ -125,9 +125,18 @@ impl Http {
             Ok(val) => val,
             Err(_) => return HeaderToken::InvalidToken,
         };
+        if access_key.len() != 48 {
+            return HeaderToken::InvalidToken;
+        }
         let cfg = self.config.read().unwrap();
-        match cfg.auth.get(access_key) {
-            Some(_) => HeaderToken::Token(access_key.to_string()),
+        match cfg.tokens.get(&access_key[0..16]) {
+            Some(token) => {
+                if &token.secret_key == &access_key[16..48] {
+                    HeaderToken::Token(access_key.to_string())
+                } else {
+                    HeaderToken::InvalidToken
+                }
+            }
             None => HeaderToken::InvalidToken,
         }
     }

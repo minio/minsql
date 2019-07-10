@@ -28,11 +28,8 @@ impl Auth {
     /// Checks the configuration hierarchy to validate if a token has access to a log
     pub fn token_has_access_to_log(&self, access_token: &str, log_name: &str) -> bool {
         let cfg = self.config.read().unwrap();
-        match cfg.auth.get(access_token) {
-            Some(val) => match val.get(log_name) {
-                Some(_) => return true,
-                None => return false,
-            },
+        match cfg.auth.get(&access_token[0..16]) {
+            Some(val) => return val.contains_key(log_name),
             None => return false,
         }
     }
