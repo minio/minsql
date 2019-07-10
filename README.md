@@ -34,7 +34,7 @@ MINSQL_METABUCKET_NAME | Name of the meta bucket.
 MINSQL_METABUCKET_ENDPOINT | Endpoint.
 MINSQL_ACCESS_KEY | Meta Bucket Access key
 MINSQL_SECRET_KEY | Meta Bucket Secret key
-MINSQL_PKCS12_CERT | *Optional:* location to a pcks12 certificate.
+MINSQL_PKCS12_CERT | *Optional:* location to a pkcs12 certificate.
 MINSQL_PKCS12_PASSWORD | *Optional:* password to unlock the certificate.
 
 

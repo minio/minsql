@@ -16,13 +16,6 @@
 
 // Server Defaults
 pub const DEFAULT_SERVER_ADDRESS: &str = "0.0.0.0:9999";
-// environment variables
-pub const METABUCKET_ENDPOINT: &str = "MINSQL_METABUCKET_ENDPOINT";
-pub const METABUCKET_NAME: &str = "MINSQL_METABUCKET_NAME";
-pub const METABUCKET_ACCESS_KEY: &str = "MINSQL_METABUCKET_ACCESS_KEY";
-pub const METABUCKET_SECRET_KEY: &str = "MINSQL_METABUCKET_SECRET_KEY";
-pub const PKCS12_CERT: &str = "MINSQL_PKCS12_CERT";
-pub const PKCS12_PASSWORD: &str = "MINSQL_PKCS12_PASSWORD";
 
 // Smart Fields
 pub const SF_IP: &str = "$ip";
