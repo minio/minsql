@@ -87,6 +87,12 @@ impl MinSQL {
             meta_c.load_config_from_metabucket()
         }));
 
+        let read_cfg = self.config.read().unwrap();
+        let pkcs12_cert = read_cfg.server.pkcs12_cert.clone();
+        let pkcs12_password = read_cfg.server.pkcs12_password.clone();
+
+        drop(read_cfg);
+
         info!("Starting MinSQL Server");
         // initialize ingest buffers
         let mut log_ingest_buffers_map: HashMap<String, Mutex<IngestBuffer>> = HashMap::new();
@@ -116,12 +122,8 @@ impl MinSQL {
                 http_c.request_router(req, log_ingest_buffers)
             })
         };
-        let read_cfg = self.config.read().unwrap();
 
-        match (
-            &read_cfg.server.pkcs12_cert,
-            &read_cfg.server.pkcs12_password,
-        ) {
+        match (&pkcs12_cert, &pkcs12_password) {
             (Some(pkcs12_cert), Some(pkcs12_pass)) => {
                 // HTTPS server
                 let mut der = Vec::new();
@@ -139,8 +141,10 @@ impl MinSQL {
 
                 // Instance responsable for flushing ingestion buffers
                 let minsql_c = MinSQL::new(Arc::clone(&self.config));
+                let meta_c = Meta::new(Arc::clone(&self.config));
 
                 hyper::rt::run(future::lazy(move || {
+                    meta_c.monitor_metabucket();
                     minsql_c.start_ingestion_flush_task(ingest_buffer_interval);
 
                     let srv = TcpListener::bind(&addr).expect("Error binding local port");
@@ -181,8 +185,10 @@ impl MinSQL {
             (None, None) => {
                 // Instance responsable for flushing ingestion buffers
                 let minsql_c = MinSQL::new(Arc::clone(&self.config));
+                let meta_c = Meta::new(Arc::clone(&self.config));
                 // HTTP server
                 hyper::rt::run(future::lazy(move || {
+                    meta_c.monitor_metabucket();
                     minsql_c.start_ingestion_flush_task(ingest_buffer_interval);
 
                     let server = Server::bind(&addr)
