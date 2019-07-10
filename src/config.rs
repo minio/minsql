@@ -185,8 +185,7 @@ pub fn load_configuration() -> Result<Config, ConfigurationError> {
         Err(e) => {
             return Err(ConfigurationError::new(&format!(
                 "No meta bucket endpoint environment variable `{}` set. {}",
-                METABUCKET_ACCESS_KEY
-                e
+                METABUCKET_ACCESS_KEY, e
             )));
         }
     };
