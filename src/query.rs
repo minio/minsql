@@ -865,7 +865,6 @@ fn mk_output_line(
                 outstring.push_str(" ");
             }
         }
-        //        outstring.push_str("\n");
         // TODO: When adding CSV output, change the separator
         Some(outstring)
     }

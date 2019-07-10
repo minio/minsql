@@ -18,24 +18,24 @@ To run the project you need to provide the access details for a `Meta Bucket` to
 
 ##### Docker:
 ````bash
-docker run -e METABUCKET_NAME='minsql-meta' -e METABUCKET_ENDPOINT='http://localhost:9000' -e ACCESS_KEY='minio' -e SECRET_KEY='minio123' minio/minlsql
+docker run -e MINSQL_METABUCKET_NAME='minsql-meta' -e MINSQL_METABUCKET_ENDPOINT='http://localhost:9000' -e MINSQL_ACCESS_KEY='minio' -e MINSQL_SECRET_KEY='minio123' minio/minsql
 ````
 
 ##### Binary:
 ````bash
-   METABUCKET_NAME=minsql-meta METABUCKET_ENDPOINT=http://localhost:9000 ACCESS_KEY=minio SECRET_KEY=minio123 minsql
+   MINSQL_METABUCKET_NAME=minsql-meta MINSQL_METABUCKET_ENDPOINT=http://localhost:9000 MINSQL_ACCESS_KEY=minio MINSQL_SECRET_KEY=minio123 minsql
 ````
 
 ### Environment variables
 
 Environment |  Description |
 --- | --- | 
-METABUCKET_NAME | Name of the meta bucket.
-METABUCKET_ENDPOINT | Endpoint.
-ACCESS_KEY | Meta Bucket Access key
-SECRET_KEY | Meta Bucket Secret key
-PKCS12_CERT | *Optional:* location to a pcks12 certificate.
-PKCS12_PASSWORD | *Optional:* password to unlock the certificate.
+MINSQL_METABUCKET_NAME | Name of the meta bucket.
+MINSQL_METABUCKET_ENDPOINT | Endpoint.
+MINSQL_ACCESS_KEY | Meta Bucket Access key
+MINSQL_SECRET_KEY | Meta Bucket Secret key
+MINSQL_PKCS12_CERT | *Optional:* location to a pcks12 certificate.
+MINSQL_PKCS12_PASSWORD | *Optional:* password to unlock the certificate.
 
 
 ## Storing logs

@@ -21,7 +21,10 @@ use std::fmt;
 use log::error;
 use serde_derive::{Deserialize, Serialize};
 
-use crate::constants::DEFAULT_SERVER_ADDRESS;
+use crate::constants::{
+    DEFAULT_SERVER_ADDRESS, METABUCKET_ACCESS_KEY, METABUCKET_ENDPOINT, METABUCKET_NAME,
+    METABUCKET_SECRET_KEY, PKCS12_CERT, PKCS12_PASSWORD,
+};
 use clap::{App, Arg};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -157,54 +160,55 @@ pub fn load_configuration() -> Result<Config, ConfigurationError> {
 
     // Check for configuration on the environment, else return error.
 
-    let metadata_endpoint: String = match env::var("METABUCKET_ENDPOINT") {
+    let metadata_endpoint: String = match env::var(METABUCKET_ENDPOINT) {
         Ok(val) => val,
         Err(e) => {
             return Err(ConfigurationError::new(&format!(
-                "No meta bucket endpoint environment variable `METABUCKET_ENDPOINT` set. {}",
+                "No meta bucket endpoint environment variable `{}` set. {}",
+                METABUCKET_ENDPOINT, e
+            )));
+        }
+    };
+
+    let metadata_bucket: String = match env::var(METABUCKET_NAME) {
+        Ok(val) => val,
+        Err(e) => {
+            return Err(ConfigurationError::new(&format!(
+                "No meta bucket name environment variable `{}` set. {}",
+                METABUCKET_NAME, e
+            )));
+        }
+    };
+
+    let access_key: String = match env::var(METABUCKET_ACCESS_KEY) {
+        Ok(val) => val,
+        Err(e) => {
+            return Err(ConfigurationError::new(&format!(
+                "No meta bucket endpoint environment variable `{}` set. {}",
+                METABUCKET_ACCESS_KEY
                 e
             )));
         }
     };
 
-    let metadata_bucket: String = match env::var("METABUCKET_NAME") {
+    let secret_key: String = match env::var(METABUCKET_SECRET_KEY) {
         Ok(val) => val,
         Err(e) => {
             return Err(ConfigurationError::new(&format!(
-                "No meta bucket name environment variable `METABUCKET_NAME` set. {}",
-                e
-            )));
-        }
-    };
-
-    let access_key: String = match env::var("METABUCKET_ACCESS_KEY") {
-        Ok(val) => val,
-        Err(e) => {
-            return Err(ConfigurationError::new(&format!(
-                "No meta bucket endpoint environment variable `METABUCKET_ACCESS_KEY` set. {}",
-                e
-            )));
-        }
-    };
-
-    let secret_key: String = match env::var("METABUCKET_SECRET_KEY") {
-        Ok(val) => val,
-        Err(e) => {
-            return Err(ConfigurationError::new(&format!(
-                "No meta bucket endpoint environment variable `METABUCKET_SECRET_KEY` set. {}",
-                e
+                "No meta bucket endpoint environment variable `{}` set. {}",
+                METABUCKET_SECRET_KEY, e
             )));
         }
     };
 
     // Certificates are optional.
 
-    let pkcs12_cert: Option<String> = match env::var("PKCS12_CERT") {
+    let pkcs12_cert: Option<String> = match env::var(PKCS12_CERT) {
         Ok(val) => Some(val),
         Err(_) => None,
     };
 
-    let pkcs12_password: Option<String> = match env::var("PKCS12_PASSWORD") {
+    let pkcs12_password: Option<String> = match env::var(PKCS12_PASSWORD) {
         Ok(val) => Some(val),
         Err(_) => None,
     };
