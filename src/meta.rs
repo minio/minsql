@@ -195,125 +195,16 @@ impl Meta {
                     "s3:ObjectRemoved:*".to_string(),
                 ],
             )
-            .map_err(|_| {
-                ()
-            })
+            .map_err(|_| ())
             .for_each(move |x| {
                 for record in x.records {
                     let cfg = Arc::clone(&cfg);
-                    let cfg2 = Arc::clone(&cfg);
+
                     let object_key = record.s3.object.key.replace("%2F", "/");
                     if record.event_name.starts_with("s3:ObjectCreated") {
-                        let ds = ds_for_metabucket(cfg);
-                        let s3_client = storage::client_for_datastore(&ds);
-
-                        let file_key_clone = object_key.clone();
-                        let cfg2 = Arc::clone(&cfg2);
-
-                        let sub_task = s3_client
-                            .get_object(GetObjectRequest {
-                                bucket: ds.bucket.clone(),
-                                key: object_key,
-                                ..Default::default()
-                            })
-                            .map_err(|e| {
-                                error!("getting object: {:?}", e);
-                                ()
-                            })
-                            .and_then(move |object_output| {
-                                // Deserialize the object output and wrap in an `MetaConfigObject`
-                                let cfg2 = Arc::clone(&cfg2);
-                                object_output
-                                    .body
-                                    .unwrap()
-                                    .concat2()
-                                    .map_err(|e| {
-                                        error!("concatenating body: {:?}", e);
-                                        ()
-                                    })
-                                    .and_then(move |bytes| {
-                                        let result = String::from_utf8(bytes.to_vec()).unwrap();
-
-                                        let parts: Vec<&str> = file_key_clone
-                                            .trim_start_matches("minsql/meta/")
-                                            .split("/")
-                                            .collect();
-                                        match (parts.len(), parts[0]) {
-                                            (2, "logs") => match serde_json::from_str(&result) {
-                                                Ok(log) => {
-                                                    let mut cfg_write = cfg2.write().unwrap();
-                                                    info!("Loading log: {}", &parts[1]);
-                                                    cfg_write.log.insert(parts[1].to_string(), log);
-                                                    drop(cfg_write);
-                                                }
-                                                Err(e) => {
-                                                    error!("error loading log configuration {}", e);
-                                                }
-                                            },
-                                            (2, "datastores") => {
-                                                match serde_json::from_str(&result) {
-                                                    Ok(datastore) => {
-                                                        let mut cfg_write = cfg2.write().unwrap();
-                                                        info!("Loading datastore: {}", &parts[1]);
-                                                        cfg_write.datastore.insert(parts[1].to_string(), datastore);
-                                                        drop(cfg_write);
-                                                    }
-                                                    Err(e) => {
-                                                        error!("error loading datastore configuration {}", e);
-                                                    }
-                                                }
-                                            }
-                                            (3, "auth") => match serde_json::from_str(&result) {
-                                                Ok(log_auth) => {
-                                                    let mut cfg_write = cfg2.write().unwrap();
-                                                    info!("Loading auth: {}", &parts[1]);
-                                                    let auth_logs = match cfg_write.auth.entry(parts[1].to_string()) {
-                                                        Entry::Occupied(o) => o.into_mut(),
-                                                        Entry::Vacant(v) => v.insert(HashMap::new()),
-                                                    };
-                                                    auth_logs.insert(parts[2].to_string(), log_auth);
-                                                    drop(cfg_write);
-                                                }
-                                                Err(e) => {
-                                                    error!("error loading auth configuration {}", e);
-                                                }
-                                            },
-                                            _ => (),
-                                        };
-                                        Ok(())
-                                    })
-                            });
-                        hyper::rt::spawn(sub_task);
+                        load_config_for_key(cfg, object_key);
                     } else if record.event_name.starts_with("s3:ObjectRemoved:Delete") {
-                        let parts: Vec<&str> = object_key
-                            .trim_start_matches("minsql/meta/")
-                            .split("/")
-                            .collect();
-                        match (parts.len(), parts[0]) {
-                            (2, "logs") => {
-                                let mut cfg_write = cfg2.write().unwrap();
-                                info!("Removing log: {}", &parts[1]);
-                                cfg_write.log.remove(parts[1]);
-                                drop(cfg_write);
-                            }
-                            (2, "datastores") => {
-                                let mut cfg_write = cfg2.write().unwrap();
-                                info!("Removing datastore: {}", &parts[1]);
-                                cfg_write.datastore.remove(parts[1]);
-                                drop(cfg_write);
-                            }
-                            (3, "auth") => {
-                                let mut cfg_write = cfg2.write().unwrap();
-                                info!("Removing auth: {}", &parts[1]);
-                                let auth_logs = match cfg_write.auth.entry(parts[1].to_string()) {
-                                    Entry::Occupied(o) => o.into_mut(),
-                                    Entry::Vacant(v) => v.insert(HashMap::new()),
-                                };
-                                auth_logs.remove(parts[2]);
-                                drop(cfg_write);
-                            }
-                            _ => (),
-                        };
+                        remove_config_for_key(cfg, object_key);
                     }
                 }
                 Ok(())
@@ -321,6 +212,123 @@ impl Meta {
 
         hyper::rt::spawn(task);
     }
+}
+
+/// Loads a configuration from the metabucket via object key, if it's a loaded type it will be
+/// stored on the configuration.
+fn load_config_for_key(cfg: Arc<RwLock<Config>>, object_key: String) {
+    let cfg2 = Arc::clone(&cfg);
+    // Get datastore for metabucket and create a client
+    let ds = ds_for_metabucket(cfg);
+    let s3_client = storage::client_for_datastore(&ds);
+
+    let file_key_clone = object_key.clone();
+
+    let sub_task = s3_client
+        .get_object(GetObjectRequest {
+            bucket: ds.bucket.clone(),
+            key: object_key,
+            ..Default::default()
+        })
+        .map_err(|e| {
+            error!("getting object: {:?}", e);
+            ()
+        })
+        .and_then(move |object_output| {
+            // Deserialize the object output
+            let cfg2 = Arc::clone(&cfg2);
+            object_output
+                .body
+                .unwrap()
+                .concat2()
+                .map_err(|e| {
+                    error!("concatenating body: {:?}", e);
+                    ()
+                })
+                .and_then(move |bytes| {
+                    let result = String::from_utf8(bytes.to_vec()).unwrap();
+
+                    let parts: Vec<&str> = file_key_clone
+                        .trim_start_matches("minsql/meta/")
+                        .split("/")
+                        .collect();
+                    match (parts.len(), parts[0]) {
+                        (2, "logs") => match serde_json::from_str(&result) {
+                            Ok(log) => {
+                                let mut cfg_write = cfg2.write().unwrap();
+                                info!("Loading log: {}", &parts[1]);
+                                cfg_write.log.insert(parts[1].to_string(), log);
+                                drop(cfg_write);
+                            }
+                            Err(e) => {
+                                error!("error loading log configuration {}", e);
+                            }
+                        },
+                        (2, "datastores") => match serde_json::from_str(&result) {
+                            Ok(datastore) => {
+                                let mut cfg_write = cfg2.write().unwrap();
+                                info!("Loading datastore: {}", &parts[1]);
+                                cfg_write.datastore.insert(parts[1].to_string(), datastore);
+                                drop(cfg_write);
+                            }
+                            Err(e) => {
+                                error!("error loading datastore configuration {}", e);
+                            }
+                        },
+                        (3, "auth") => match serde_json::from_str(&result) {
+                            Ok(log_auth) => {
+                                let mut cfg_write = cfg2.write().unwrap();
+                                info!("Loading auth: {}", &parts[1]);
+                                let auth_logs = match cfg_write.auth.entry(parts[1].to_string()) {
+                                    Entry::Occupied(o) => o.into_mut(),
+                                    Entry::Vacant(v) => v.insert(HashMap::new()),
+                                };
+                                auth_logs.insert(parts[2].to_string(), log_auth);
+                                drop(cfg_write);
+                            }
+                            Err(e) => {
+                                error!("error loading auth configuration {}", e);
+                            }
+                        },
+                        _ => (),
+                    };
+                    Ok(())
+                })
+        });
+    hyper::rt::spawn(sub_task);
+}
+
+/// Attemps to remove a configuration by object key
+fn remove_config_for_key(cfg: Arc<RwLock<Config>>, object_key: String) {
+    let parts: Vec<&str> = object_key
+        .trim_start_matches("minsql/meta/")
+        .split("/")
+        .collect();
+    match (parts.len(), parts[0]) {
+        (2, "logs") => {
+            let mut cfg_write = cfg.write().unwrap();
+            info!("Removing log: {}", &parts[1]);
+            cfg_write.log.remove(parts[1]);
+            drop(cfg_write);
+        }
+        (2, "datastores") => {
+            let mut cfg_write = cfg.write().unwrap();
+            info!("Removing datastore: {}", &parts[1]);
+            cfg_write.datastore.remove(parts[1]);
+            drop(cfg_write);
+        }
+        (3, "auth") => {
+            let mut cfg_write = cfg.write().unwrap();
+            info!("Removing auth: {}", &parts[1]);
+            let auth_logs = match cfg_write.auth.entry(parts[1].to_string()) {
+                Entry::Occupied(o) => o.into_mut(),
+                Entry::Vacant(v) => v.insert(HashMap::new()),
+            };
+            auth_logs.remove(parts[2]);
+            drop(cfg_write);
+        }
+        _ => (),
+    };
 }
 
 pub fn ds_for_metabucket(cfg: Arc<RwLock<Config>>) -> DataStore {
