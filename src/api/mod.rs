@@ -13,8 +13,10 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
+use crate::api::api_auth::ApiAuth;
 use crate::api::api_datastores::ApiDataStores;
 use crate::api::logs::ApiLogs;
+use crate::api::api_tokens::ApiTokens;
 use crate::config::Config;
 use crate::http::{return_404, ResponseFuture};
 use futures::future;
@@ -23,8 +25,10 @@ use serde::Serialize;
 use serde_derive::Serialize;
 use std::sync::{Arc, RwLock};
 
+pub mod api_auth;
 pub mod api_datastores;
 pub mod logs;
+pub mod api_tokens;
 
 pub struct Api {
     config: Arc<RwLock<Config>>,
@@ -39,6 +43,10 @@ impl Api {
     pub fn router(&self, req: Request<Body>, path_parts: Vec<&str>) -> ResponseFuture {
         match path_parts.get(1) {
             // delegate to proper module
+            Some(&"auth") => {
+                let auths = ApiAuth::new(Arc::clone(&self.config));
+                auths.route(req, path_parts)
+            }
             Some(&"datastores") => {
                 let datastores = ApiDataStores::new(Arc::clone(&self.config));
                 datastores.route(req, path_parts)
@@ -46,6 +54,10 @@ impl Api {
             Some(&"logs") => {
                 let logs = ApiLogs::new(Arc::clone(&self.config));
                 logs.route(req, path_parts)
+            }
+            Some(&"tokens") => {
+                let auths = ApiTokens::new(Arc::clone(&self.config));
+                auths.route(req, path_parts)
             }
             _ => Box::new(future::ok(return_404())),
         }
