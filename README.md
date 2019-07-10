@@ -48,7 +48,7 @@ You can send multiple log lines separated by `new line`
 
 ## Querying logs
 
-To get data out of MinSQL you can use SQL. Note data MinSQL is a data layer and not a computation layer, therefore certain SQL statements that need computations (SUM, MAX, GROUP BY, JOIN, etc...) are not supported.
+To get data out of MinSQL you can use SQL. Note that MinSQL is a data layer and not a computation layer, therefore certain SQL statements that need computations (SUM, MAX, GROUP BY, JOIN, etc...) are not supported.
 
 All the query statements must be sent via `POST` to your MinSQL instance.
 
@@ -79,7 +79,7 @@ This will return you all the raw log lines stored for that log.
 We can get only parts of the data by using any of the supported MinSQL entities, which start with a `$` sign.
 
 #### Positional
-We can select from the data by it's position, for example to get the first column and the fourth we can use `$1` and `$4`
+We can select from the data by its position, for example to get the first column and the fourth we can use `$1` and `$4`
 ```sql
 SELECT $1, $4 FROM mylog;
 ```
@@ -96,7 +96,7 @@ You can see that the data was selected as is, however the selected date column i
 
 #### By Type
 
-MinSQL provides a nice list of entities that make the extraction of chunks data from your raw data easy thanks to our powerful Schema on Read approach. For example we can select any ip in our data by using the entity `$ip` and any date using `$date`.
+MinSQL provides a nice list of entities that make the extraction of data chunks from your raw data easy thanks to our powerful Schema on Read approach. For example we can select any ip in our data by using the entity `$ip` and any date using `$date`.
 ```sql
 SELECT $ip, $date FROM mylog
 ```
@@ -150,5 +150,5 @@ A list of supported entities by MinSQL :
 * *$ip*: Selects any format of ipv4
 * *$date*: Any format of date containing date, month and year.
 * *$email*: Any email@address.com
-* *$quoted*: any text that is withing single quotes (') or double quotes (")
+* *$quoted*: any text that is within single quotes (') or double quotes (")
 * *$url*: any url starting with http
