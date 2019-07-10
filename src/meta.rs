@@ -23,8 +23,10 @@ use futures::Stream;
 use log::error;
 use rusoto_s3::{GetObjectRequest, ListObjectsRequest, S3};
 
-use crate::config::{Config, DataStore, Log};
+use crate::config::{Config, DataStore, Log, LogAuth};
 use crate::storage;
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 
 pub struct Meta {
     config: Arc<RwLock<Config>>,
@@ -38,20 +40,13 @@ impl Meta {
     /// Scans the metabucket for configuration files and loads them into the shared state `Config`
     pub fn load_config_from_metabucket(&self) -> impl Future<Item = (), Error = ()> {
         let read_cfg = self.config.read().unwrap();
-        let server_cfg = match &read_cfg.server {
-            Some(server) => server,
-            None => {
-                error!("No server configuration in your config.toml");
-                process::exit(0x0100);
-            }
-        };
         // validate access to the metadata store
         // Represent the metabucket as a datastore to re-use other functions we have in `storage.rs`
         let ds = DataStore {
-            endpoint: server_cfg.metadata_endpoint.clone(),
-            access_key: server_cfg.access_key.clone(),
-            secret_key: server_cfg.secret_key.clone(),
-            bucket: server_cfg.metadata_bucket.clone(),
+            endpoint: read_cfg.server.metadata_endpoint.clone(),
+            access_key: read_cfg.server.access_key.clone(),
+            secret_key: read_cfg.server.secret_key.clone(),
+            bucket: read_cfg.server.metadata_bucket.clone(),
             prefix: "".to_owned(),
             name: Some("metabucket".to_owned()),
         };
@@ -135,13 +130,21 @@ impl Meta {
                                                     Err(_) => MetaConfigObject::Unknown,
                                                 }
                                             }
+                                            (3, "auth") => match serde_json::from_str(&result) {
+                                                Ok(t) => MetaConfigObject::LogAuth((
+                                                    parts[1].to_string(),
+                                                    parts[2].to_string(),
+                                                    t,
+                                                )),
+                                                Err(_) => MetaConfigObject::Unknown,
+                                            },
                                             _ => MetaConfigObject::Unknown,
                                         };
                                         meta_obj
                                     })
                             })
                     })
-                    .buffer_unordered(5) // Do up to 5 concurrent get_object calls
+                    .buffer_unordered(5)
                     .collect()
             })
             .map_err(|e| {
@@ -160,6 +163,14 @@ impl Meta {
                         MetaConfigObject::DataStore(ds) => {
                             cfg.datastore.insert(ds.clone().name.unwrap(), ds);
                         }
+                        MetaConfigObject::LogAuth((token, log_name, log_auth)) => {
+                            // Get the map for the token, if it's not set yet, initialize it.
+                            let auth_logs = match cfg.auth.entry(token) {
+                                Entry::Occupied(o) => o.into_mut(),
+                                Entry::Vacant(v) => v.insert(HashMap::new()),
+                            };
+                            auth_logs.insert(log_name, log_auth);
+                        }
                         _ => (),
                     }
                 }
@@ -173,5 +184,6 @@ impl Meta {
 enum MetaConfigObject {
     Log(Log),
     DataStore(DataStore),
+    LogAuth((String, String, LogAuth)),
     Unknown,
 }

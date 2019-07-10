@@ -14,28 +14,32 @@ docker build . -t minio/minsql
 
 An instance of [MinIO](https://github.com/minio/minio) is needed as the storage engine for MinSQL.
 
-To run the project you may specify a `.toml` configuration file, if none is specified *MinSQL* will attempt to look for a `config.toml` file.
+To run the project you need to provide the access details for a `Meta Bucket` to store the shared configuration between multiple `MinSQL` instances, the location and access to it should be configured via environment variables when starting MinSQL .
 
-```
-docker run -v config.toml:config.toml minio/minsql config.toml
-```
-A sample configuration file can be found at `config.toml.template`
-
-### Meta Bucket
-
-A bucket to store shared configuration across multiple `MinSQL` instances is needed, the location and access to it should be configured on the `config.toml`.
-
-````toml
-[server]
-   ...
-   metadata_bucket = "minsql-meta"
-   metadata_endpoint = "http://localhost:9000"
-   access_key = "minio"
-   secret_key = "minio123"
+##### Docker:
+````bash
+docker run -e MINSQL_METABUCKET_NAME='minsql-meta' -e MINSQL_METABUCKET_ENDPOINT='http://localhost:9000' -e MINSQL_ACCESS_KEY='minio' -e MINSQL_SECRET_KEY='minio123' minio/minsql
 ````
 
+##### Binary:
+````bash
+   MINSQL_METABUCKET_NAME=minsql-meta MINSQL_METABUCKET_ENDPOINT=http://localhost:9000 MINSQL_ACCESS_KEY=minio MINSQL_SECRET_KEY=minio123 minsql
+````
+
+### Environment variables
+
+Environment |  Description |
+--- | --- | 
+MINSQL_METABUCKET_NAME | Name of the meta bucket.
+MINSQL_METABUCKET_ENDPOINT | Endpoint.
+MINSQL_ACCESS_KEY | Meta Bucket Access key
+MINSQL_SECRET_KEY | Meta Bucket Secret key
+MINSQL_PKCS12_CERT | *Optional:* location to a pkcs12 certificate.
+MINSQL_PKCS12_PASSWORD | *Optional:* password to unlock the certificate.
+
+
 ## Storing logs
-For a log `mylog` defined on the `config.toml` we can store logs on *MinSQL* by performing a `PUT` to your `MinSQL` instance
+For a log `mylog` defined on the configuration we can store logs on *MinSQL* by performing a `PUT` to your `MinSQL` instance
 
 ```
 curl -X PUT \

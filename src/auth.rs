@@ -42,7 +42,7 @@ impl Auth {
 mod auth_tests {
     use std::collections::HashMap;
 
-    use crate::config::{Config, LogAuth};
+    use crate::config::{Config, LogAuth, Server};
 
     use super::*;
 
@@ -52,7 +52,6 @@ mod auth_tests {
         log_auth_map.insert(
             log_name,
             LogAuth {
-                token: token.clone(),
                 api: Vec::new(),
                 expire: "".to_string(),
                 status: "".to_string(),
@@ -60,11 +59,18 @@ mod auth_tests {
         );
 
         let mut auth = HashMap::new();
-        auth.insert(token.clone(), log_auth_map);
+        auth.insert(token, log_auth_map);
 
         let cfg = Config {
-            version: "1".to_string(),
-            server: None,
+            server: Server {
+                address: "".to_string(),
+                metadata_endpoint: "".to_string(),
+                metadata_bucket: "".to_string(),
+                access_key: "".to_string(),
+                secret_key: "".to_string(),
+                pkcs12_cert: None,
+                pkcs12_password: None,
+            },
             datastore: HashMap::new(),
             log: HashMap::new(),
             auth: auth,
