@@ -12,7 +12,7 @@ if [ ! -f "$HYPERSCAN_ROOT/lib/libhs.a" ]; then
 	  -DCMAKE_INSTALL_PREFIX="$HYPERSCAN_ROOT" \
 	  -DCMAKE_C_COMPILER=/usr/bin/gcc \
 	  -DCMAKE_CXX_COMPILER=/usr/bin/g++
-    make
+    make -j 8
     make install
 else
     echo "Using cached hyperscan v${HYPERSCAN_VERSION} @ ${HYPERSCAN_ROOT}.";
