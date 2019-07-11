@@ -155,6 +155,13 @@ struct ErrorResponse {
     message: String,
 }
 
+pub fn return_500(message: &str) -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::INTERNAL_SERVER_ERROR)
+        .body(Body::from(message.to_string()))
+        .unwrap()
+}
+
 pub fn return_404() -> Response<Body> {
     let obj = ErrorResponse {
         message: NOTFOUND_BODY.to_string(),

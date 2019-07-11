@@ -15,6 +15,7 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use std::sync::{Arc, RwLock};
 
+use futures::future::Either;
 use futures::sink::Sink;
 use futures::stream::Stream;
 use futures::{future, Future};
@@ -23,7 +24,7 @@ use tokio::sync::mpsc::unbounded_channel;
 
 use crate::api::{ListResponse, SafeOutput, ViewSet};
 use crate::config::{Config, Log};
-use crate::http::{return_400, return_404, ResponseFuture};
+use crate::http::{return_400, return_404, return_500, ResponseFuture};
 use crate::storage::{delete_object_metabucket, put_object_metabucket};
 
 pub struct ApiLogs {
@@ -38,6 +39,64 @@ impl SafeOutput for Log {
 impl ApiLogs {
     pub fn new(cfg: Arc<RwLock<Config>>) -> ApiLogs {
         ApiLogs { config: cfg }
+    }
+
+    // Parses the log from the create body; returns error response in
+    // case it is not valid.
+    fn parse_create_body(
+        entire_body: Vec<u8>,
+        cfg: Arc<RwLock<Config>>,
+    ) -> Result<Log, Response<Body>> {
+        let payload = String::from_utf8(entire_body)
+            .map_err(|_| return_400("Could not understand request"))?;
+
+        let log: Log =
+            serde_json::from_str(&payload).map_err(|_| return_400("Could not parse request"))?;
+
+        // Validate Commit Window
+        if log.commit_window == "" {
+            return Err(return_400("Commit window key cannot be empty."));
+        }
+        if !log.commit_window.ends_with("s") && !log.commit_window.ends_with("m") {
+            return Err(return_400(
+                "Commit window must be specified in either seconds `5s` or minutes `1m`",
+            ));
+        }
+
+        // if the commit window parses to 0 and the value is not 0, 0s or 0m, it's an invalid window
+        let parsed_window = Config::commit_window_to_seconds(&log.commit_window);
+        if log.commit_window != "0"
+            && log.commit_window != "0s"
+            && log.commit_window != "0m"
+            && parsed_window == 0
+        {
+            return Err(return_400("Commit window is invalid"));
+        }
+
+        let cfg_read = cfg.read().unwrap();
+        // validate the datastores
+        for ds_name in &log.datastores {
+            if cfg_read.datastore.contains_key(ds_name) == false {
+                return Err(return_400(&format!(
+                    "{} is an invalid datastore name",
+                    &ds_name
+                )));
+            }
+        }
+
+        // Validate name
+
+        if let Some(lg_name) = &log.name {
+            if lg_name == "" {
+                return Err(return_400("Log name cannot be empty."));
+            }
+            // validate datastore name uniqueness
+            if cfg_read.log.contains_key(lg_name) {
+                return Err(return_400("Log name already in use"));
+            }
+        }
+
+        Ok(log)
     }
 }
 
@@ -65,85 +124,33 @@ impl ViewSet for ApiLogs {
                 .concat2()
                 .from_err()
                 .and_then(move |entire_body| {
-                    let payload: String = match String::from_utf8(entire_body.to_vec()) {
-                        Ok(str) => str,
-                        Err(_) => {
-                            return Ok(return_400("Could not understand request"));
+                    match ApiLogs::parse_create_body(entire_body.to_vec(), cfg.clone()) {
+                        Ok(mut log) => {
+                            let ds_serialized = serde_json::to_string(&log).unwrap();
+                            let log_name = log.clone().name.unwrap();
+
+                            let res = put_object_metabucket(
+                                cfg,
+                                format!("minsql/meta/logs/{}", log_name),
+                                ds_serialized,
+                            )
+                            .then(move |v| match v {
+                                Ok(_) => {
+                                    log.safe();
+                                    Either::A(future::result(Ok(Response::builder()
+                                        .header(header::CONTENT_TYPE, "application/json")
+                                        .body(Body::from(serde_json::to_string(&log).unwrap()))
+                                        .unwrap())))
+                                }
+                                Err(e) => Either::B(future::result(Ok(return_500(&format!(
+                                    "I/O Err: {}",
+                                    e
+                                ))))),
+                            });
+                            Either::A(res)
                         }
-                    };
-                    let mut log: Log = match serde_json::from_str(&payload) {
-                        Ok(v) => v,
-                        Err(_) => {
-                            return Ok(return_400("Could not parse request"));
-                        }
-                    };
-
-                    // Validate Commit Window
-                    if log.commit_window == "" {
-                        return Ok(return_400("Commit window key cannot be empty."));
+                        Err(err_resp) => Either::B(future::result(Ok(err_resp))),
                     }
-                    if !log.commit_window.ends_with("s") && !log.commit_window.ends_with("m") {
-                        return Ok(return_400("Commit window must be specified in either seconds `5s` or minutes `1m`"));
-                    }
-
-                    // if the commit window parses to 0 and the value is not 0, 0s or 0m, it's an invalid window
-                    let parsed_window = Config::commit_window_to_seconds(&log.commit_window);
-                    if log.commit_window != "0" 
-                        && log.commit_window != "0s" 
-                        && log.commit_window != "0m" 
-                        && parsed_window == 0 {
-                        return Ok(return_400("Commit window is invalid"));
-                    }
-
-                    let cfg_read = cfg.read().unwrap();
-                    // validate the datastores
-                    for ds_name in &log.datastores {
-                        if cfg_read.datastore.contains_key(ds_name) == false {
-                            return Ok(return_400(&format!("{} is an invalid datastore name", &ds_name)));
-                        }
-                    }
-
-                    // Validate name
-
-                    let mut log_name: String = "".to_string();
-                    if let Some(lg_name) = &log.name {
-                        if lg_name == "" {
-                            return Ok(return_400("Log name cannot be empty."));
-                        }
-                        // validate datastore name uniqueness
-                        if cfg_read.log.contains_key(lg_name) {
-                            return Ok(return_400("Log name already in use"));
-                        }
-                        log_name = lg_name.clone();
-                    }
-
-                    // everything seems ok, create the datastore
-                    let ds_serialized = serde_json::to_string(&log).unwrap();
-
-                    let (tx, rx) = unbounded_channel();
-                    let cfg = Arc::clone(&cfg);
-                    tokio::spawn({
-                        put_object_metabucket(
-                            cfg,
-                            format!("minsql/meta/logs/{}", log_name),
-                            ds_serialized,
-                        )
-                            .map_err(|_| ())
-                            .and_then(move |_| {
-                                log.safe();
-                                let ds_serialized = serde_json::to_string(&log).unwrap();
-
-                                tx.send(ds_serialized).map_err(|_| ())
-                            })
-                            .map(|_| ())
-                            .map_err(|_| ())
-                    });
-
-                    let body_str = rx.map_err(|e| e).map(|x| Chunk::from(x));
-                    let mut response = Response::builder();
-                    response.header(header::CONTENT_TYPE, "application/json");
-
-                    Ok(response.body(Body::wrap_stream(body_str)).unwrap())
                 }),
         )
     }
