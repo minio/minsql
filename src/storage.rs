@@ -32,11 +32,15 @@ use rusoto_core::RusotoError;
 use rusoto_credential::AwsCredentials;
 use rusoto_credential::CredentialsError;
 use rusoto_credential::ProvideAwsCredentials;
-use rusoto_s3::{GetObjectRequest, ListObjectsRequest, PutObjectRequest, S3Client, S3};
+use rusoto_s3::{
+    DeleteObjectOutput, DeleteObjectRequest, GetObjectRequest, ListObjectsRequest, PutObjectOutput,
+    PutObjectRequest, S3Client, S3,
+};
 use tokio_codec::{FramedRead, LinesCodec};
 use uuid::Uuid;
 
 use crate::config::{Config, DataStore};
+use crate::meta::ds_for_metabucket;
 use bytes::Bytes;
 
 #[derive(Debug)]
@@ -209,7 +213,6 @@ pub fn write_to_datastore(
     let stream_of_bytes = stream::iter_ok(payload).map(|s| Bytes::from(s.into_bytes()));
     let streaming_body = rusoto_s3::StreamingBody::new(stream_of_bytes);
     // save the payload
-    // TODO: Make this function return a stream so we can switch to an async response and not block
     s3_client
         .put_object(PutObjectRequest {
             bucket: datastore.bucket.clone(),
@@ -229,6 +232,63 @@ pub fn write_to_datastore(
             let duration = start.elapsed();
             println!("Writing to minio: {:?}", duration);
         })
+}
+
+pub fn put_object_metabucket(
+    cfg: Arc<RwLock<Config>>,
+    key: String,
+    payload: String,
+) -> impl Future<Item = PutObjectOutput, Error = StorageError<PutObjectError>> {
+    // Represent the metabucket as a datastore
+    let datastore = ds_for_metabucket(cfg);
+
+    // Get the Object Storage client
+    let s3_client = client_for_datastore(&datastore);
+    // turn the payload into a streaming body
+    let len = payload.len() as i64;
+    let pvec: Vec<String> = vec![payload];
+    let stream_of_bytes = stream::iter_ok(pvec).map(|s| Bytes::from(s.into_bytes()));
+    let streaming_body = rusoto_s3::StreamingBody::new(stream_of_bytes);
+    // save the payload
+    s3_client
+        .put_object(PutObjectRequest {
+            bucket: datastore.bucket.clone(),
+            key: key,
+            body: Some(streaming_body),
+            content_length: Some(len),
+            ..Default::default()
+        })
+        .map_err(|e| {
+            StorageError::Operation(PutObjectError::Write(format!(
+                "Could not write to datastore: {}",
+                e
+            )))
+        })
+        .map(move |x| x)
+}
+
+#[derive(Debug)]
+pub enum DeleteObjectError {
+    Unknown,
+}
+
+pub fn delete_object_metabucket(
+    cfg: Arc<RwLock<Config>>,
+    key: String,
+) -> impl Future<Item = DeleteObjectOutput, Error = StorageError<DeleteObjectError>> {
+    // Represent the metabucket as a datastore
+    let datastore = ds_for_metabucket(cfg);
+
+    // Get the Object Storage client
+    let s3_client = client_for_datastore(&datastore);
+    s3_client
+        .delete_object(DeleteObjectRequest {
+            bucket: datastore.bucket.clone(),
+            key: key,
+            ..Default::default()
+        })
+        .map_err(|_| StorageError::Operation(DeleteObjectError::Unknown))
+        .map(move |x| x)
 }
 
 #[derive(Debug)]
