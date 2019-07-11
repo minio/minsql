@@ -216,16 +216,14 @@ impl ViewSet for ApiLogs {
                             .then(move |v| match v {
                                 Ok(_) => {
                                     log.safe();
-                                    Either::A(future::ok(
+                                    future::ok(
                                         Response::builder()
                                             .header(header::CONTENT_TYPE, "application/json")
                                             .body(Body::from(serde_json::to_string(&log).unwrap()))
                                             .unwrap(),
-                                    ))
+                                    )
                                 }
-                                Err(e) => {
-                                    Either::B(future::ok(return_500(&format!("I/O Err: {}", e))))
-                                }
+                                Err(e) => future::ok(return_500(&format!("I/O Err: {}", e))),
                             });
                             Either::A(res)
                         }
@@ -268,16 +266,14 @@ impl ViewSet for ApiLogs {
                             .then(move |v| match v {
                                 Ok(_) => {
                                     log.safe();
-                                    Either::A(future::ok(
+                                    future::ok(
                                         Response::builder()
                                             .header(header::CONTENT_TYPE, "application/json")
                                             .body(Body::from(serde_json::to_string(&log).unwrap()))
                                             .unwrap(),
-                                    ))
+                                    )
                                 }
-                                Err(e) => {
-                                    Either::B(future::ok(return_500(&format!("I/O Err: {}", e))))
-                                }
+                                Err(e) => future::ok(return_500(&format!("I/O Err: {}", e))),
                             });
                             Either::A(res)
                         }
