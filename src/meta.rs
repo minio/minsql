@@ -161,7 +161,7 @@ impl Meta {
                             cfg_write.datastore.insert(ds.clone().name.unwrap(), ds);
                         }
                         MetaConfigObject::Token(t) => {
-                            cfg.tokens.insert(t.access_key.clone(), t);
+                            cfg_write.tokens.insert(t.access_key.clone(), t);
                         }
                         MetaConfigObject::LogAuth((token, log_name, log_auth)) => {
                             // Get the map for the token, if it's not set yet, initialize it.
