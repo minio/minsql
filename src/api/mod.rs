@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use crate::api::api_datastores::ApiDataStores;
-use crate::api::api_logs::ApiLogs;
+use crate::api::logs::ApiLogs;
 use crate::config::Config;
 use crate::http::{return_404, ResponseFuture};
 use futures::future;
@@ -24,7 +24,7 @@ use serde_derive::Serialize;
 use std::sync::{Arc, RwLock};
 
 pub mod api_datastores;
-pub mod api_logs;
+pub mod logs;
 
 pub struct Api {
     config: Arc<RwLock<Config>>,
