@@ -16,10 +16,8 @@
 use std::sync::{Arc, RwLock};
 
 use futures::future::Either;
-use futures::sink::Sink;
 use futures::{future, Future, Stream};
 use hyper::{header, Body, Chunk, Request, Response};
-use tokio::sync::mpsc::unbounded_channel;
 
 use crate::api::{ListResponse, SafeOutput, ViewSet};
 use crate::config::{Config, Log};
@@ -303,27 +301,24 @@ impl ViewSet for ApiLogs {
             None => "".to_string(),
         };
 
-        let (tx, rx) = unbounded_channel();
-        let cfg = Arc::clone(&self.config);
-        tokio::spawn({
-            delete_object_metabucket(cfg, format!("minsql/meta/logs/{}", log_name))
-                .map_err(|_| {})
-                .and_then(move |_| {
-                    //remove sensitive data
-                    log.safe();
-                    let ds_serialized = serde_json::to_string(&log).unwrap();
-                    tx.send(ds_serialized).map_err(|_| ())
-                })
-                .map(|_| ())
-                .map_err(|_| ())
-        });
-
-        let body_str = rx.map_err(|e| e).map(|x| Chunk::from(x));
-        let mut response = Response::builder();
-        response.header(header::CONTENT_TYPE, "application/json");
-
-        Box::new(future::ok(
-            response.body(Body::wrap_stream(body_str)).unwrap(),
-        ))
+        Box::new(
+            delete_object_metabucket(
+                Arc::clone(&self.config),
+                format!("minsql/meta/logs/{}", log_name),
+            )
+            .map_err(|_| {
+                println!("Some error deleting");
+                return_500("Error deleting")
+            })
+            .then(move |_| {
+                //remove sensitive data
+                log.safe();
+                let ds_serialized = serde_json::to_string(&log).unwrap();
+                let body = Body::from(Chunk::from(ds_serialized));
+                let mut response = Response::builder();
+                response.header(header::CONTENT_TYPE, "application/json");
+                future::ok(response.body(body).unwrap())
+            }),
+        )
     }
 }
