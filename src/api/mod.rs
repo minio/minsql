@@ -13,10 +13,10 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use crate::api::api_auth::ApiAuth;
-use crate::api::api_datastores::ApiDataStores;
+use crate::api::auth::ApiAuth;
+use crate::api::datastores::ApiDataStores;
 use crate::api::logs::ApiLogs;
-use crate::api::api_tokens::ApiTokens;
+use crate::api::tokens::ApiTokens;
 use crate::config::Config;
 use crate::http::{return_404, ResponseFuture};
 use futures::future;
@@ -25,10 +25,10 @@ use serde::Serialize;
 use serde_derive::Serialize;
 use std::sync::{Arc, RwLock};
 
-pub mod api_auth;
-pub mod api_datastores;
+pub mod auth;
+pub mod datastores;
 pub mod logs;
-pub mod api_tokens;
+pub mod tokens;
 
 pub struct Api {
     config: Arc<RwLock<Config>>,
