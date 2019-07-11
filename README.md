@@ -162,7 +162,7 @@ curl -X POST \
 ```
 
 ## Storing logs
-For a log `mylog` defined on the configuration we can store logs on *MinSQL* by performing a `PUT` to your `MinSQL` instance
+For a log `mylog` defined on the configuration we can store logs on MinSQL by performing a `PUT` to your MinSQL instance
 
 ```
 curl -X PUT \
