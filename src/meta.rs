@@ -352,20 +352,6 @@ pub fn ds_for_metabucket(cfg: Arc<RwLock<Config>>) -> DataStore {
     }
 }
 
-pub fn ds_for_metabucket(cfg: Arc<RwLock<Config>>) -> DataStore {
-    // TODO: Maybe cache this on cfg.server
-    let read_cfg = cfg.read().unwrap();
-    // Represent the metabucket as a datastore to re-use other functions we have in `storage.rs`
-    DataStore {
-        endpoint: read_cfg.server.metadata_endpoint.clone(),
-        access_key: read_cfg.server.access_key.clone(),
-        secret_key: read_cfg.server.secret_key.clone(),
-        bucket: read_cfg.server.metadata_bucket.clone(),
-        prefix: "".to_owned(),
-        name: Some("metabucket".to_owned()),
-    }
-}
-
 #[derive(Debug)]
 enum MetaConfigObject {
     Log(Log),
