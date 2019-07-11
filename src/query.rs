@@ -948,9 +948,12 @@ impl StateHolder {
 
 #[cfg(test)]
 mod query_tests {
-    use crate::config::{Config, Log, LogAuth, Server};
+    use crate::config::{Config, Log, LogAuth, Server, Token};
 
     use super::*;
+
+    static VALID_TOKEN: &str = "TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1";
+    static VALID_TOKEN2: &str = "TOKEN2TOKEN2TOKEN2TOKEN2TOKEN2TOKEN2TOKEN2TOKEN2";
 
     // Generates a Config object with only one auth item for one log
     fn get_ds_log_auth_config_for(log_name: String, token: &String) -> Config {
@@ -966,8 +969,9 @@ mod query_tests {
 
         let mut log_auth_map: HashMap<String, LogAuth> = HashMap::new();
         log_auth_map.insert(
-            log_name,
+            log_name.clone(),
             LogAuth {
+                log_name: log_name,
                 api: Vec::new(),
                 expire: "".to_string(),
                 status: "".to_string(),
@@ -975,7 +979,19 @@ mod query_tests {
         );
 
         let mut auth = HashMap::new();
-        auth.insert(token.clone(), log_auth_map);
+        auth.insert(token[0..16].to_string(), log_auth_map);
+
+        let mut tokens = HashMap::new();
+        tokens.insert(
+            token[0..16].to_string(),
+            Token {
+                access_key: token[0..16].to_string(),
+                secret_key: token[16..48].to_string(),
+                description: None,
+                is_admin: false,
+                enabled: true,
+            },
+        );
 
         let cfg = Config {
             server: Server {
@@ -988,6 +1004,7 @@ mod query_tests {
                 pkcs12_password: None,
             },
             datastore: HashMap::new(),
+            tokens: tokens,
             log: log_map,
             auth: auth,
         };
@@ -996,7 +1013,7 @@ mod query_tests {
 
     #[test]
     fn process_simple_select() {
-        let access_token = "TOKEN1".to_string();
+        let access_token = VALID_TOKEN.to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));
@@ -1018,7 +1035,7 @@ mod query_tests {
 
     #[test]
     fn process_simple_select_limit() {
-        let access_token = "TOKEN1".to_string();
+        let access_token = VALID_TOKEN.to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));
@@ -1044,7 +1061,7 @@ mod query_tests {
 
     #[test]
     fn process_positional_fields_select() {
-        let access_token = "TOKEN1".to_string();
+        let access_token = VALID_TOKEN.to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));
@@ -1078,7 +1095,7 @@ mod query_tests {
 
     #[test]
     fn process_positional_fields_select_limit() {
-        let access_token = "TOKEN1".to_string();
+        let access_token = VALID_TOKEN.to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));
@@ -1121,7 +1138,7 @@ mod query_tests {
 
     #[test]
     fn process_smart_fields_select_limit() {
-        let access_token = "TOKEN1".to_string();
+        let access_token = VALID_TOKEN.to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));
@@ -1171,7 +1188,7 @@ mod query_tests {
 
     #[test]
     fn process_mixed_smart_positional_fields_select_limit() {
-        let access_token = "TOKEN1".to_string();
+        let access_token = VALID_TOKEN.to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));
@@ -1217,14 +1234,14 @@ mod query_tests {
                     None => panic!("NO LIMIT FOUND"),
                 }
             }
-            _ => panic!("error parsing query"),
+            e => panic!("error parsing query: {:?}", e),
         }
     }
 
     #[test]
     #[should_panic]
     fn process_invalid_query() {
-        let access_token = "TOKEN1".to_string();
+        let access_token = VALID_TOKEN.to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));
@@ -1241,8 +1258,8 @@ mod query_tests {
 
     #[test]
     fn process_simple_select_invalid_access() {
-        let provided_access_token = "TOKEN2".to_string();
-        let access_token = "TOKEN1".to_string();
+        let provided_access_token = VALID_TOKEN2.to_string();
+        let access_token = VALID_TOKEN.to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));
@@ -1267,8 +1284,8 @@ mod query_tests {
 
     #[test]
     fn process_simple_select_invalid_table() {
-        let provided_access_token = "TOKEN2".to_string();
-        let access_token = "TOKEN1".to_string();
+        let provided_access_token = VALID_TOKEN2.to_string();
+        let access_token = VALID_TOKEN.to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));
@@ -1293,7 +1310,7 @@ mod query_tests {
 
     #[test]
     fn validate_invalid_table() {
-        let access_token = "TOKEN1".to_string();
+        let access_token = VALID_TOKEN.to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));

@@ -27,6 +27,9 @@ impl Auth {
     }
     /// Checks the configuration hierarchy to validate if a token has access to a log
     pub fn token_has_access_to_log(&self, access_token: &str, log_name: &str) -> bool {
+        if access_token.len() < 16 {
+            return false;
+        }
         let cfg = self.config.read().unwrap();
         match cfg.auth.get(&access_token[0..16]) {
             Some(val) => return val.contains_key(log_name),
@@ -43,12 +46,15 @@ mod auth_tests {
 
     use super::*;
 
+    static VALID_TOKEN: &str = "TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1";
+
     // Generates a Config object with only one auth item for one log
     fn get_auth_config_for(token: String, log_name: String) -> Config {
         let mut log_auth_map: HashMap<String, LogAuth> = HashMap::new();
         log_auth_map.insert(
-            log_name,
+            log_name.clone(),
             LogAuth {
+                log_name: log_name,
                 api: Vec::new(),
                 expire: "".to_string(),
                 status: "".to_string(),
@@ -56,7 +62,7 @@ mod auth_tests {
         );
 
         let mut auth = HashMap::new();
-        auth.insert(token, log_auth_map);
+        auth.insert(token[0..16].to_string(), log_auth_map);
 
         let cfg = Config {
             server: Server {
@@ -70,6 +76,7 @@ mod auth_tests {
             },
             datastore: HashMap::new(),
             log: HashMap::new(),
+            tokens: Default::default(),
             auth: auth,
         };
         cfg
@@ -97,10 +104,10 @@ mod auth_tests {
     #[test]
     fn valid_token() {
         run_test_get_auth_config_for(TokenTestCase {
-            valid_token: "TOKEN1".to_string(),
+            valid_token: VALID_TOKEN.to_string(),
             valid_log_name: "mylog".to_string(),
 
-            token: "TOKEN1".to_string(),
+            token: VALID_TOKEN.to_string(),
             log_name: "mylog".to_string(),
 
             expected: true,
@@ -110,7 +117,7 @@ mod auth_tests {
     #[test]
     fn invalid_token() {
         run_test_get_auth_config_for(TokenTestCase {
-            valid_token: "TOKEN1".to_string(),
+            valid_token: VALID_TOKEN.to_string(),
             valid_log_name: "mylog".to_string(),
 
             token: "INVALID".to_string(),
@@ -123,10 +130,10 @@ mod auth_tests {
     #[test]
     fn valid_token_invalid_log() {
         run_test_get_auth_config_for(TokenTestCase {
-            valid_token: "TOKEN1".to_string(),
+            valid_token: VALID_TOKEN.to_string(),
             valid_log_name: "mylog".to_string(),
 
-            token: "TOKEN1".to_string(),
+            token: VALID_TOKEN.to_string(),
             log_name: "invalid_log".to_string(),
 
             expected: false,

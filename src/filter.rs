@@ -257,8 +257,9 @@ mod filter_tests {
 
         let mut log_auth_map: HashMap<String, LogAuth> = HashMap::new();
         log_auth_map.insert(
-            log_name,
+            log_name.clone(),
             LogAuth {
+                log_name: log_name,
                 api: Vec::new(),
                 expire: "".to_string(),
                 status: "".to_string(),
@@ -266,7 +267,7 @@ mod filter_tests {
         );
 
         let mut auth = HashMap::new();
-        auth.insert(token.clone(), log_auth_map);
+        auth.insert(token[0..16].to_string(), log_auth_map);
 
         let cfg = Config {
             server: Server {
@@ -279,6 +280,7 @@ mod filter_tests {
                 pkcs12_password: None,
             },
             datastore: HashMap::new(),
+            tokens: HashMap::new(),
             log: log_map,
             auth: auth,
         };
@@ -289,7 +291,7 @@ mod filter_tests {
         query_stmt: String,
         line: &String,
     ) -> (Statement, HashMap<String, Option<String>>) {
-        let access_token = "TOKEN1".to_string();
+        let access_token = "TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1".to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
         let cfg = Arc::new(RwLock::new(cfg));
