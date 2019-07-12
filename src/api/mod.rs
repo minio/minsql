@@ -13,17 +13,19 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
+use std::sync::{Arc, RwLock};
+
+use futures::future;
+use hyper::{header, Body, Method, Request, Response};
+use serde::Serialize;
+use serde_derive::Serialize;
+
 use crate::api::auth::ApiAuth;
 use crate::api::datastores::ApiDataStores;
 use crate::api::logs::ApiLogs;
 use crate::api::tokens::ApiTokens;
 use crate::config::Config;
 use crate::http::{return_404, ResponseFuture};
-use futures::future;
-use hyper::{header, Body, Method, Request, Response};
-use serde::Serialize;
-use serde_derive::Serialize;
-use std::sync::{Arc, RwLock};
 
 pub mod auth;
 pub mod datastores;
@@ -63,6 +65,7 @@ impl Api {
         }
     }
 }
+
 /// Standard REST behavior.
 pub trait ViewSet {
     // Fulfills a GET operation, which should list items
