@@ -1,42 +1,90 @@
 > NOTE: This project is under development, please do not depend on it yet as things may break.
 
 # MinSQL
-
 MinSQL is a log search engine designed with simplicity in mind to the extent that no SDK is needed to interact with it, most programming languages and tools have some form of http request capability (ie: curl) and that's all you need to interact with MinSQL.
 
 ## To build
-
 ```
 docker build . -t minio/minsql
+docker run --rm minio/minsql --help
+```
+
+OR
+
+```
+make
+./minsql --help
 ```
 
 ## Running the project
-
-An instance of [MinIO](https://github.com/minio/minio) is needed as the storage engine for MinSQL.
+An instance of [MinIO](https://github.com/minio/minio) is needed as the storage engine for MinSQL. To keep things easier we have a `docker-compose` example for MinIO and MinSQL.
 
 To run the project you need to provide the access details for a `Meta Bucket` to store the shared configuration between multiple `MinSQL` instances, the location and access to it should be configured via environment variables when starting MinSQL .
 
-##### Docker:
-````bash
-docker run -e MINSQL_METABUCKET_NAME='minsql-meta' -e MINSQL_METABUCKET_ENDPOINT='http://localhost:9000' -e MINSQL_ACCESS_KEY='minio' -e MINSQL_SECRET_KEY='minio123' minio/minsql
-````
-
 ##### Binary:
-````bash
-   MINSQL_METABUCKET_NAME=minsql-meta MINSQL_METABUCKET_ENDPOINT=http://localhost:9000 MINSQL_ACCESS_KEY=minio MINSQL_SECRET_KEY=minio123 minsql
-````
+```
+export MINSQL_METABUCKET_NAME=minsql-meta
+export MINSQL_METABUCKET_ENDPOINT=http://localhost:9000
+export MINSQL_METABUCKET_ACCESS_KEY=minio
+export MINSQL_METABUCKET_SECRET_KEY=minio123
+./minsql
+```
+
+##### Docker
+Create the compose file
+```
+cat > docker-compose.yml <<EOF
+version: '2'
+
+services:
+ minio-engine:
+  image: minio/minio
+  volumes:
+   - data:/data
+  environment:
+   MINIO_ACCESS_KEY: minio
+   MINIO_SECRET_KEY: minio123
+  command: server /data
+ mc:
+  image: minio/mc
+  depends_on:
+   - minio
+  entrypoint: >
+    /bin/sh -c "
+    echo /usr/bin/mc config host a http://minio-engine:9000 minio minio123;
+    /usr/bin/mc mb a/minsql-meta;
+    "
+ minsql:
+  image: minio/minsql
+  depends_on:
+   - minio
+   - mc
+  ports:
+   - "9999:9999"
+  environment:
+   MINSQL_METABUCKET_NAME: minsql-meta
+   MINSQL_METABUCKET_ENDPOINT: http://minio-engine:9000
+   MINSQL_ACCESS_KEY: minio
+   MINSQL_SECRET_KEY: minio123
+
+volumes:
+  data:
+EOF
+```
+
+```
+docker-compose up
+```
 
 ### Environment variables
-
-Environment |  Description |
---- | --- | 
-MINSQL_METABUCKET_NAME | Name of the meta bucket.
-MINSQL_METABUCKET_ENDPOINT | Endpoint.
-MINSQL_ACCESS_KEY | Meta Bucket Access key
-MINSQL_SECRET_KEY | Meta Bucket Secret key
-MINSQL_PKCS12_CERT | *Optional:* location to a pkcs12 certificate.
-MINSQL_PKCS12_PASSWORD | *Optional:* password to unlock the certificate.
-
+| Environment                  | Description                                       |
+| -------------                | -------------                                     |
+| MINSQL_METABUCKET_NAME       | Name of the meta bucket                           |
+| MINSQL_METABUCKET_ENDPOINT   | Name of the endpoint, ex: `http://localhost:9000` |
+| MINSQL_METABUCKET_ACCESS_KEY | Meta Bucket Access key                            |
+| MINSQL_METABUCKET_SECRET_KEY | Meta Bucket Secret key                            |
+| MINSQL_PKCS12_CERT           | *Optional:* location to a pkcs12 certificate.     |
+| MINSQL_PKCS12_PASSWORD       | *Optional:* password to unlock the certificate.   |
 
 ## Storing logs
 For a log `mylog` defined on the configuration we can store logs on *MinSQL* by performing a `PUT` to your `MinSQL` instance
@@ -51,13 +99,11 @@ curl -X PUT \
 You can send multiple log lines separated by `new line`
 
 ## Querying logs
-
 To get data out of MinSQL you can use SQL. Note that MinSQL is a data layer and not a computation layer, therefore certain SQL statements that need computations (SUM, MAX, GROUP BY, JOIN, etc...) are not supported.
 
 All the query statements must be sent via `POST` to your MinSQL instance.
 
 ### SELECT
-
 To select all the logs for a particular log you can perform a simple SELECT statement
 ```sql
 SELECT * FROM mylog
@@ -99,7 +145,6 @@ To which MinSQL will reply
 You can see that the data was selected as is, however the selected date column is not clean enough, MinSQL provides other entities to deal with this.
 
 #### By Type
-
 MinSQL provides a nice list of entities that make the extraction of data chunks from your raw data easy thanks to our powerful Schema on Read approach. For example we can select any ip in our data by using the entity `$ip` and any date using `$date`.
 ```sql
 SELECT $ip, $date FROM mylog
@@ -130,14 +175,12 @@ SELECT * FROM mylog WHERE $ip = '67.164.164.165'
 ```
 
 To which MinSQL will reply only with the matched lines
-
 ```
 67.164.164.165 - - [24/Jul/2017:00:16:46 +0000] "GET /info.php HTTP/1.1" 200 24564 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36"
 67.164.164.165 - - [24/Jul/2017:00:16:48 +0000] "GET /favicon.ico HTTP/1.1" 404 209 "http://104.236.9.232/info.php" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36"
 ```
 
 ### By value
-
 You can select log lines that contain a value by using the `LIKE` operator or `NOT NULL` for any entity.
 
 ```sql
@@ -147,7 +190,6 @@ SELECT * FROM mylog WHERE $line LIKE 'Intel' AND $email IS NOT NULL
 This query would return all the log lines conaining the word `Intel` that also contain an email address.
 
 ## Entities
-
 A list of supported entities by MinSQL :
 
 * *$line*: Represents the whole log line
