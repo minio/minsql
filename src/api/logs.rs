@@ -62,11 +62,7 @@ impl ApiLogs {
 
         // if the commit window parses to 0 and the value is not 0, 0s or 0m, it's an invalid window
         let parsed_window = Config::commit_window_to_seconds(&log.commit_window);
-        if log.commit_window != "0"
-            && log.commit_window != "0s"
-            && log.commit_window != "0m"
-            && parsed_window == 0
-        {
+        if parsed_window.is_none() {
             return Err(return_400("Commit window is invalid"));
         }
 
@@ -129,11 +125,7 @@ impl ApiLogs {
             }
             // if the commit window parses to 0 and the value is not 0, 0s or 0m, it's an invalid window
             let parsed_window = Config::commit_window_to_seconds(&commit_window);
-            if commit_window != "0"
-                && commit_window != "0s"
-                && commit_window != "0m"
-                && parsed_window == 0
-            {
+            if parsed_window.is_none() {
                 return Err(return_400("Commit window is invalid"));
             }
             current_log.commit_window = commit_window.clone();

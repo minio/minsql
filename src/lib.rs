@@ -220,7 +220,9 @@ impl MinSQL {
                 );
                 let task = Interval::new(
                     Instant::now(),
-                    Duration::from_secs(Config::commit_window_to_seconds(&log.commit_window)),
+                    Duration::from_secs(
+                        Config::commit_window_to_seconds(&log.commit_window).unwrap(),
+                    ),
                 )
                 .map_err(|e| panic!("interval errored; err={:?}", e))
                 .for_each(move |_| {
