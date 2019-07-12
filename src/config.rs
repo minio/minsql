@@ -94,16 +94,16 @@ impl Config {
     /// Translates a string duration to an unsigned integer
     /// for example, "5s" returns 5
     /// "10m" returns 600
-    pub fn commit_window_to_seconds(commit_window: &String) -> u64 {
+    pub fn commit_window_to_seconds(commit_window: &String) -> Option<u64> {
         let last_character = &commit_window[commit_window.len() - 1..commit_window.len()];
         match last_character {
             "s" => {
                 let integer_value = &commit_window[0..commit_window.len() - 1].parse::<u64>();
                 let seconds = match integer_value {
-                    Ok(val) => *val,
+                    Ok(val) => Some(*val),
                     Err(_) => {
                         error!("Interval cannot be parsed");
-                        0 as u64
+                        None
                     }
                 };
                 seconds
@@ -111,15 +111,15 @@ impl Config {
             "m" => {
                 let integer_value = &commit_window[0..commit_window.len() - 1].parse::<u64>();
                 let seconds = match integer_value {
-                    Ok(val) => *val * 60,
+                    Ok(val) => Some(*val * 60),
                     Err(_) => {
                         error!("Interval cannot be parsed");
-                        0 as u64
+                        None
                     }
                 };
                 seconds
             }
-            _ => 0 as u64,
+            _ => None,
         }
     }
 }
@@ -246,7 +246,22 @@ mod config_tests {
 
     #[test]
     fn parse_interval() {
-        assert_eq!(Config::commit_window_to_seconds(&"5s".to_string()), 5);
-        assert_eq!(Config::commit_window_to_seconds(&"5m".to_string()), 300);
+        assert_eq!(Config::commit_window_to_seconds(&"5s".to_string()), Some(5));
+        assert_eq!(
+            Config::commit_window_to_seconds(&"5m".to_string()),
+            Some(300)
+        );
+    }
+
+    #[test]
+    fn invalid_parse_interval() {
+        assert_eq!(
+            Config::commit_window_to_seconds(&"5 seconds".to_string()),
+            None
+        );
+        assert_eq!(
+            Config::commit_window_to_seconds(&"5 minutes".to_string()),
+            None
+        );
     }
 }

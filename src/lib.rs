@@ -218,9 +218,15 @@ impl MinSQL {
                     "Starting flusing loop for {} at {}",
                     &log_name, &log.commit_window
                 );
+                // Start task to repeat every `commit_window` seconds, if the commit window is
+                // invalid, default to 5 seconds.
                 let task = Interval::new(
                     Instant::now(),
-                    Duration::from_secs(Config::commit_window_to_seconds(&log.commit_window)),
+                    Duration::from_secs(
+                        Config::commit_window_to_seconds(&log.commit_window)
+                            .or_else(|| Some(5 as u64))
+                            .unwrap(),
+                    ),
                 )
                 .map_err(|e| panic!("interval errored; err={:?}", e))
                 .for_each(move |_| {
