@@ -1,0 +1,35 @@
+version: '2'
+
+services:
+ minio-engine:
+  image: minio/minio
+  volumes:
+   - data:/data
+  environment:
+   MINIO_ACCESS_KEY: minio
+   MINIO_SECRET_KEY: minio123
+  command: server /data
+ mc:
+  image: minio/mc
+  depends_on:
+   - minio-engine
+  entrypoint: >
+    /bin/sh -c "
+    /usr/bin/mc config host add --quiet --api s3v4 msql http://minio-engine:9000 minio minio123;
+    /usr/bin/mc rb --force msql/minsql-meta;
+    /usr/bin/mc mb --quiet msql/minsql-meta;
+    "
+ minsql:
+  image: minio/minsql
+  depends_on:
+   - mc
+  ports:
+   - "9999:9999"
+  environment:
+   MINSQL_METABUCKET_NAME: minsql-meta
+   MINSQL_METABUCKET_ENDPOINT: http://minio-engine:9000
+   MINSQL_METABUCKET_ACCESS_KEY: minio
+   MINSQL_METABUCKET_SECRET_KEY: minio123
+
+volumes:
+  data:
