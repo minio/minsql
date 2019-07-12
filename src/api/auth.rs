@@ -1,3 +1,11 @@
+use std::sync::{Arc, RwLock};
+
+use futures::sink::Sink;
+use futures::stream::Stream;
+use futures::{future, Future};
+use hyper::{header, Body, Chunk, Method, Request, Response};
+use tokio::sync::mpsc::unbounded_channel;
+
 // This file is part of MinSQL
 // Copyright (c) 2019 MinIO, Inc.
 //
@@ -15,14 +23,8 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 use crate::api::{ListResponse, SafeOutput, ViewSet};
 use crate::config::{Config, LogAuth};
-use crate::http::{return_400, return_404, ResponseFuture};
+use crate::http::{return_400, return_404, return_500, ResponseFuture};
 use crate::storage::{delete_object_metabucket, put_object_metabucket};
-use futures::sink::Sink;
-use futures::stream::Stream;
-use futures::{future, Future};
-use hyper::{header, Body, Chunk, Method, Request, Response};
-use std::sync::{Arc, RwLock};
-use tokio::sync::mpsc::unbounded_channel;
 
 pub struct ApiAuth {
     config: Arc<RwLock<Config>>,
@@ -323,28 +325,24 @@ impl ApiAuth {
             }
         };
 
-        let (tx, rx) = unbounded_channel();
-        let cfg = Arc::clone(&self.config);
-        tokio::spawn({
-            delete_object_metabucket(cfg, format!("minsql/meta/auth/{}/{}", token_access_key, pk))
-                .map_err(|_| {})
-                .and_then(move |_| {
-                    //remove sensitive data
-                    log_auth.safe();
-                    let ds_serialized = serde_json::to_string(&log_auth).unwrap();
-                    tx.send(ds_serialized).map_err(|_| ())
-                })
-                .map(|_| ())
-                .map_err(|_| ())
-        });
-
-        let body_str = rx.map_err(|e| e).map(|x| Chunk::from(x));
-        let mut response = Response::builder();
-        response.header(header::CONTENT_TYPE, "application/json");
-
-        Box::new(future::ok(
-            response.body(Body::wrap_stream(body_str)).unwrap(),
-        ))
+        Box::new(
+            delete_object_metabucket(
+                Arc::clone(&self.config),
+                format!("minsql/meta/auth/{}/{}", token_access_key, pk),
+            )
+            .map_err(|_| {
+                return_500("Error deleting");
+            })
+            .then(move |_| {
+                //remove sensitive data
+                log_auth.safe();
+                let ds_serialized = serde_json::to_string(&log_auth).unwrap();
+                let body = Body::from(Chunk::from(ds_serialized));
+                let mut response = Response::builder();
+                response.header(header::CONTENT_TYPE, "application/json");
+                future::ok(response.body(body).unwrap())
+            }),
+        )
     }
 }
 
