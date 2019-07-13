@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock};
 
+use futures::future::Either;
 use futures::sink::Sink;
 use futures::stream::Stream;
 use futures::{future, Future};
@@ -63,113 +64,121 @@ impl ApiAuth {
         };
         Box::new(self.build_response(items))
     }
+    // Parses the auth from the create body; returns error response in
+    // case it is not valid.
+    fn parse_create_body(
+        entire_body: Vec<u8>,
+        cfg: Arc<RwLock<Config>>,
+        token_access_key_clone: &String,
+    ) -> Result<LogAuth, Response<Body>> {
+        let cfg_read = cfg.read().unwrap();
+        // validate token
+        if cfg_read.tokens.contains_key(token_access_key_clone) == false {
+            return Err(return_404());
+        }
+        let payload: String = match String::from_utf8(entire_body) {
+            Ok(str) => str,
+            Err(_) => {
+                return Err(return_400("Could not understand request"));
+            }
+        };
+        //default token
+        let mut new_log_auth: LogAuth = LogAuth {
+            log_name: "".to_string(),
+            api: vec![],
+            expire: "".to_string(),
+            status: "".to_string(),
+        };
+
+        let log_auth: serde_json::Value = match serde_json::from_str(&payload) {
+            Ok(v) => v,
+            Err(_) => {
+                return Err(return_400("Could not parse request"));
+            }
+        };
+
+        // Validate log name
+        if let Some(serde_json::Value::String(log_name)) = log_auth.get("log_name") {
+            if log_name == "" {
+                return Err(return_400("Log name cannot be empty"));
+            }
+            // validate log_name uniqueness
+            if let Some(log_map) = cfg_read.auth.get(token_access_key_clone) {
+                if log_map.contains_key(log_name) {
+                    return Err(return_400(&format!(
+                        "Auth already given for log {} in token {}",
+                        &log_name, token_access_key_clone,
+                    )));
+                }
+            }
+            new_log_auth.log_name = log_name.clone();
+        }
+
+        if let Some(serde_json::Value::Array(api_value)) = log_auth.get("api") {
+            let mut apis: Vec<String> = Vec::new();
+            for v in api_value {
+                if let serde_json::Value::String(api) = v {
+                    // validate the API
+                    if api != "search" && api != "store" {
+                        return Err(return_400(&format!("Unknown API {} provided", api)));
+                    }
+                    apis.push(api.clone());
+                }
+            }
+            new_log_auth.api = apis;
+        }
+
+        if let Some(serde_json::Value::String(expire)) = log_auth.get("expire") {
+            new_log_auth.expire = expire.clone();
+        }
+
+        if let Some(serde_json::Value::String(status)) = log_auth.get("status") {
+            new_log_auth.status = status.clone();
+        }
+        Ok(new_log_auth)
+    }
 
     fn create(&self, req: Request<Body>, token_access_key: &str) -> ResponseFuture {
         let cfg = Arc::clone(&self.config);
+        let cfg2 = Arc::clone(&self.config);
         let token_access_key_clone = token_access_key.to_string();
         Box::new(
             req.into_body()
                 .concat2()
                 .from_err()
                 .and_then(move |entire_body| {
-                    let cfg_read = cfg.read().unwrap();
-                    // validate token
-                    if cfg_read.tokens.contains_key(&token_access_key_clone) == false {
-                        return Ok(return_404());
-                    }
-                    let payload: String = match String::from_utf8(entire_body.to_vec()) {
-                        Ok(str) => str,
-                        Err(_) => {
-                            return Ok(return_400("Could not understand request"));
+                    match ApiAuth::parse_create_body(
+                        entire_body.to_vec(),
+                        cfg,
+                        &token_access_key_clone,
+                    ) {
+                        Ok(mut new_log_auth) => {
+                            // everything seems ok, create the token
+                            let token_serialized = serde_json::to_string(&new_log_auth).unwrap();
+
+                            let res = put_object_metabucket(
+                                cfg2,
+                                format!(
+                                    "minsql/meta/auth/{}/{}",
+                                    token_access_key_clone, &new_log_auth.log_name
+                                ),
+                                token_serialized,
+                            )
+                            .map_err(|_| ())
+                            .then(move |_| {
+                                new_log_auth.safe();
+                                let ds_serialized = serde_json::to_string(&new_log_auth).unwrap();
+
+                                let body = Body::from(Chunk::from(ds_serialized));
+                                let mut response = Response::builder();
+                                response.header(header::CONTENT_TYPE, "application/json");
+
+                                future::ok(response.body(body).unwrap())
+                            });
+                            Either::A(res)
                         }
-                    };
-                    //default token
-                    let mut new_log_auth: LogAuth = LogAuth {
-                        log_name: "".to_string(),
-                        api: vec![],
-                        expire: "".to_string(),
-                        status: "".to_string(),
-                    };
-
-                    let log_auth: serde_json::Value = match serde_json::from_str(&payload) {
-                        Ok(v) => v,
-                        Err(_) => {
-                            return Ok(return_400("Could not parse request"));
-                        }
-                    };
-
-                    // Validate log name
-                    if let Some(serde_json::Value::String(log_name)) = log_auth.get("log_name") {
-                        if log_name == "" {
-                            return Ok(return_400("Log name cannot be empty"));
-                        }
-                        // validate log_name uniqueness
-                        if let Some(log_map) = cfg_read.auth.get(&token_access_key_clone) {
-                            if log_map.contains_key(log_name) {
-                                return Ok(return_400(&format!(
-                                    "Auth already given for log {} in token {}",
-                                    &log_name, &token_access_key_clone,
-                                )));
-                            }
-                        }
-                        new_log_auth.log_name = log_name.clone();
+                        Err(e) => Either::B(future::ok(e)),
                     }
-
-                    if let Some(serde_json::Value::Array(api_value)) = log_auth.get("api") {
-                        let mut apis: Vec<String> = Vec::new();
-                        for v in api_value {
-                            if let serde_json::Value::String(api) = v {
-                                // validate the API
-                                if api != "search" && api != "store" {
-                                    return Ok(return_400(&format!(
-                                        "Unknown API {} provided",
-                                        api
-                                    )));
-                                }
-                                apis.push(api.clone());
-                            }
-                        }
-                        new_log_auth.api = apis;
-                    }
-
-                    if let Some(serde_json::Value::String(expire)) = log_auth.get("expire") {
-                        new_log_auth.expire = expire.clone();
-                    }
-
-                    if let Some(serde_json::Value::String(status)) = log_auth.get("status") {
-                        new_log_auth.status = status.clone();
-                    }
-
-                    // everything seems ok, create the token
-                    let token_serialized = serde_json::to_string(&new_log_auth).unwrap();
-
-                    let (tx, rx) = unbounded_channel();
-                    let cfg = Arc::clone(&cfg);
-                    tokio::spawn({
-                        put_object_metabucket(
-                            cfg,
-                            format!(
-                                "minsql/meta/auth/{}/{}",
-                                token_access_key_clone, &new_log_auth.log_name
-                            ),
-                            token_serialized,
-                        )
-                        .map_err(|_| ())
-                        .and_then(move |_| {
-                            new_log_auth.safe();
-                            let ds_serialized = serde_json::to_string(&new_log_auth).unwrap();
-
-                            tx.send(ds_serialized).map_err(|_| ())
-                        })
-                        .map(|_| ())
-                        .map_err(|_| ())
-                    });
-
-                    let body_str = rx.map_err(|e| e).map(|x| Chunk::from(x));
-                    let mut response = Response::builder();
-                    response.header(header::CONTENT_TYPE, "application/json");
-
-                    Ok(response.body(Body::wrap_stream(body_str)).unwrap())
                 }),
         )
     }
