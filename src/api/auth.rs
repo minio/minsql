@@ -1,10 +1,3 @@
-use std::sync::{Arc, RwLock};
-
-use futures::future::Either;
-use futures::stream::Stream;
-use futures::{future, Future};
-use hyper::{header, Body, Chunk, Method, Request, Response};
-
 // This file is part of MinSQL
 // Copyright (c) 2019 MinIO, Inc.
 //
@@ -20,6 +13,13 @@ use hyper::{header, Body, Chunk, Method, Request, Response};
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
+use std::sync::{Arc, RwLock};
+
+use futures::future::Either;
+use futures::stream::Stream;
+use futures::{future, Future};
+use hyper::{header, Body, Chunk, Method, Request, Response};
+
 use crate::api::{ListResponse, SafeOutput, ViewSet};
 use crate::config::{Config, LogAuth};
 use crate::http::{return_400, return_404, return_500, ResponseFuture};
