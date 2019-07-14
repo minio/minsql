@@ -351,14 +351,17 @@ impl ApiAuth {
             .map_err(|_| {
                 return_500("Error deleting");
             })
-            .then(move |_| {
-                //remove sensitive data
-                log_auth.safe();
-                let ds_serialized = serde_json::to_string(&log_auth).unwrap();
-                let body = Body::from(Chunk::from(ds_serialized));
-                let mut response = Response::builder();
-                response.header(header::CONTENT_TYPE, "application/json");
-                future::ok(response.body(body).unwrap())
+            .then(move |v| match v {
+                Ok(_) => {
+                    //remove sensitive data
+                    log_auth.safe();
+                    let ds_serialized = serde_json::to_string(&log_auth).unwrap();
+                    let body = Body::from(Chunk::from(ds_serialized));
+                    let mut response = Response::builder();
+                    response.header(header::CONTENT_TYPE, "application/json");
+                    future::ok(response.body(body).unwrap())
+                }
+                Err(_) => future::ok(return_500("error deleting auth from storage")),
             }),
         )
     }
