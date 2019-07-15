@@ -282,6 +282,17 @@ fn load_config_for_key(cfg: Arc<RwLock<Config>>, object_key: String) {
                                 error!("error loading datastore configuration {}", e);
                             }
                         },
+                        (2, "tokens") => match serde_json::from_str(&result) {
+                            Ok(token) => {
+                                let mut cfg_write = cfg2.write().unwrap();
+                                info!("Loading token: {}", &parts[1]);
+                                cfg_write.tokens.insert(parts[1].to_string(), token);
+                                drop(cfg_write);
+                            }
+                            Err(e) => {
+                                error!("error loading datastore configuration {}", e);
+                            }
+                        },
                         (3, "auth") => match serde_json::from_str(&result) {
                             Ok(log_auth) => {
                                 let mut cfg_write = cfg2.write().unwrap();
