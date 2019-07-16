@@ -71,111 +71,124 @@ impl Meta {
         let s3_client2 = Arc::clone(&s3_client);
 
         let main_cfg = Arc::clone(&self.config);
+
+        let bucket_name = ds.bucket.clone();
+        let bucket_name2 = ds.bucket.clone();
         // get all the objects inside the meta folder
-        let task = s3_client1
-            .list_objects(ListObjectsRequest {
-                bucket: ds.bucket.clone(),
-                prefix: Some("minsql/meta/".to_owned()),
-                ..Default::default()
-            })
-            .map(|list_objects| match list_objects.contents {
-                Some(v) => v,
-                None => Vec::new(),
-            })
-            .map_err(|_| ())
-            .and_then(|objects| {
-                // For each objects, get_object, filter out system files
-                stream::iter_ok(objects)
-                    .map(|file_object| file_object.clone().key.unwrap())
-                    .map(move |file_key| {
-                        let file_key_clone = file_key.clone();
-                        s3_client2
-                            .get_object(GetObjectRequest {
-                                bucket: ds.bucket.clone(),
-                                key: file_key,
-                                ..Default::default()
-                            })
-                            .map_err(|e| {
-                                error!("getting object: {:?}", e);
-                                ()
-                            })
-                            .and_then(|object_output| {
-                                // Deserialize the object output and wrap in an `MetaConfigObject`
-                                object_output
-                                    .body
-                                    .unwrap()
-                                    .concat2()
-                                    .map_err(|e| {
-                                        error!("concatenating body: {:?}", e);
-                                        ()
-                                    })
-                                    .map(move |bytes| {
-                                        let result = String::from_utf8(bytes.to_vec()).unwrap();
-                                        let parts: Vec<&str> = file_key_clone
-                                            .trim_start_matches("minsql/meta/")
-                                            .split("/")
-                                            .collect();
-                                        let meta_obj = match (parts.len(), parts[0]) {
-                                            (2, "logs") => match serde_json::from_str(&result) {
-                                                Ok(t) => MetaConfigObject::Log(t),
-                                                Err(_) => MetaConfigObject::Unknown,
-                                            },
-                                            (2, "datastores") => {
-                                                match serde_json::from_str(&result) {
-                                                    Ok(t) => MetaConfigObject::DataStore(t),
-                                                    Err(_) => MetaConfigObject::Unknown,
-                                                }
-                                            }
-                                            (2, "tokens") => match serde_json::from_str(&result) {
-                                                Ok(t) => MetaConfigObject::Token(t),
-                                                Err(_) => MetaConfigObject::Unknown,
-                                            },
-                                            (3, "auth") => match serde_json::from_str(&result) {
-                                                Ok(t) => MetaConfigObject::LogAuth((
-                                                    parts[1].to_string(),
-                                                    parts[2].to_string(),
-                                                    t,
-                                                )),
-                                                Err(_) => MetaConfigObject::Unknown,
-                                            },
-                                            _ => MetaConfigObject::Unknown,
-                                        };
-                                        meta_obj
-                                    })
-                            })
-                    })
-                    .buffer_unordered(5)
-                    .collect()
-            })
-            .map_err(|_| ())
-            .map(move |result_meta_objects: Vec<MetaConfigObject>| {
-                //get a write lock on config
-                let mut cfg_write = main_cfg.write().unwrap();
-                //time to update the configuration!
-                for mco in result_meta_objects {
-                    match mco {
-                        MetaConfigObject::Log(l) => {
-                            cfg_write.log.insert(l.clone().name.unwrap(), l);
-                        }
-                        MetaConfigObject::DataStore(ds) => {
-                            cfg_write.datastore.insert(ds.clone().name.unwrap(), ds);
-                        }
-                        MetaConfigObject::Token(t) => {
-                            cfg_write.tokens.insert(t.access_key.clone(), t);
-                        }
-                        MetaConfigObject::LogAuth((token, log_name, log_auth)) => {
-                            // Get the map for the token, if it's not set yet, initialize it.
-                            let auth_logs = match cfg_write.auth.entry(token) {
-                                Entry::Occupied(o) => o.into_mut(),
-                                Entry::Vacant(v) => v.insert(HashMap::new()),
+        let task = stream::unfold(Some("".to_string()), move |state| match state {
+            None => None,
+            Some(marker) => {
+                let bucket_name = bucket_name.clone();
+                Some(
+                    s3_client1
+                        .list_objects(ListObjectsRequest {
+                            bucket: bucket_name,
+                            prefix: Some("minsql/meta/".to_owned()),
+                            marker: Some(marker),
+                            ..Default::default()
+                        })
+                        .map(|list_objects| {
+                            let objs = list_objects
+                                .contents
+                                .unwrap_or(vec![])
+                                .into_iter()
+                                .map(|x| x.key.unwrap())
+                                .collect();
+
+                            (objs, list_objects.next_marker)
+                        }),
+                )
+            }
+        })
+        .map(|x: Vec<String>| stream::iter_ok(x))
+        .map_err(|_| ())
+        .flatten()
+        .map(move |file_key: String| {
+            let file_key_clone = file_key.clone();
+            let bucket_name3 = bucket_name2.clone();
+            s3_client2
+                .get_object(GetObjectRequest {
+                    bucket: bucket_name3,
+                    key: file_key,
+                    ..Default::default()
+                })
+                .map_err(|e| {
+                    error!("getting object: {:?}", e);
+                    ()
+                })
+                .and_then(|object_output| {
+                    // Deserialize the object output and wrap in an `MetaConfigObject`
+                    object_output
+                        .body
+                        .unwrap()
+                        .concat2()
+                        .map_err(|e| {
+                            error!("concatenating body: {:?}", e);
+                            ()
+                        })
+                        .map(move |bytes| {
+                            let result = String::from_utf8(bytes.to_vec()).unwrap();
+                            let parts: Vec<&str> = file_key_clone
+                                .trim_start_matches("minsql/meta/")
+                                .split("/")
+                                .collect();
+                            let meta_obj = match (parts.len(), parts[0]) {
+                                (2, "logs") => match serde_json::from_str(&result) {
+                                    Ok(t) => MetaConfigObject::Log(t),
+                                    Err(_) => MetaConfigObject::Unknown,
+                                },
+                                (2, "datastores") => match serde_json::from_str(&result) {
+                                    Ok(t) => MetaConfigObject::DataStore(t),
+                                    Err(_) => MetaConfigObject::Unknown,
+                                },
+                                (2, "tokens") => match serde_json::from_str(&result) {
+                                    Ok(t) => MetaConfigObject::Token(t),
+                                    Err(_) => MetaConfigObject::Unknown,
+                                },
+                                (3, "auth") => match serde_json::from_str(&result) {
+                                    Ok(t) => MetaConfigObject::LogAuth((
+                                        parts[1].to_string(),
+                                        parts[2].to_string(),
+                                        t,
+                                    )),
+                                    Err(_) => MetaConfigObject::Unknown,
+                                },
+                                _ => MetaConfigObject::Unknown,
                             };
-                            auth_logs.insert(log_name, log_auth);
-                        }
-                        _ => (),
-                    }
+                            meta_obj
+                        })
+                })
+        })
+        .buffer_unordered(5)
+        .map(move |mco: MetaConfigObject| {
+            //get a write lock on config
+            let mut cfg_write = main_cfg.write().unwrap();
+            //time to update the configuration!
+            match mco {
+                MetaConfigObject::Log(l) => {
+                    cfg_write.log.insert(l.clone().name.unwrap(), l);
                 }
-                drop(cfg_write);
-            });
+                MetaConfigObject::DataStore(ds) => {
+                    cfg_write.datastore.insert(ds.clone().name.unwrap(), ds);
+                }
+                MetaConfigObject::Token(t) => {
+                    cfg_write.tokens.insert(t.access_key.clone(), t);
+                }
+                MetaConfigObject::LogAuth((token, log_name, log_auth)) => {
+                    // Get the map for the token, if it's not set yet, initialize it.
+                    let auth_logs = match cfg_write.auth.entry(token) {
+                        Entry::Occupied(o) => o.into_mut(),
+                        Entry::Vacant(v) => v.insert(HashMap::new()),
+                    };
+                    auth_logs.insert(log_name, log_auth);
+                }
+                _ => (),
+            }
+
+            drop(cfg_write);
+        })
+        .fold((), |_, _| Ok(()));
+
         task
     }
 
