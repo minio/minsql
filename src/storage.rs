@@ -426,6 +426,7 @@ mod storage_tests {
                 pkcs12_password: None,
             },
             datastore: datastore_map,
+            tokens: HashMap::new(),
             log: log_map,
             auth: HashMap::new(),
         };

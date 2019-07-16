@@ -27,7 +27,7 @@ use minio_rs::minio;
 use minio_rs::minio::Credentials;
 use rusoto_s3::{GetObjectRequest, ListObjectsRequest, S3};
 
-use crate::config::{Config, DataStore, Log, LogAuth};
+use crate::config::{Config, DataStore, Log, LogAuth, Token};
 use crate::storage;
 
 pub struct Meta {
@@ -126,6 +126,10 @@ impl Meta {
                                                     Err(_) => MetaConfigObject::Unknown,
                                                 }
                                             }
+                                            (2, "tokens") => match serde_json::from_str(&result) {
+                                                Ok(t) => MetaConfigObject::Token(t),
+                                                Err(_) => MetaConfigObject::Unknown,
+                                            },
                                             (3, "auth") => match serde_json::from_str(&result) {
                                                 Ok(t) => MetaConfigObject::LogAuth((
                                                     parts[1].to_string(),
@@ -155,6 +159,9 @@ impl Meta {
                         }
                         MetaConfigObject::DataStore(ds) => {
                             cfg_write.datastore.insert(ds.clone().name.unwrap(), ds);
+                        }
+                        MetaConfigObject::Token(t) => {
+                            cfg_write.tokens.insert(t.access_key.clone(), t);
                         }
                         MetaConfigObject::LogAuth((token, log_name, log_auth)) => {
                             // Get the map for the token, if it's not set yet, initialize it.
@@ -275,6 +282,17 @@ fn load_config_for_key(cfg: Arc<RwLock<Config>>, object_key: String) {
                                 error!("error loading datastore configuration {}", e);
                             }
                         },
+                        (2, "tokens") => match serde_json::from_str(&result) {
+                            Ok(token) => {
+                                let mut cfg_write = cfg2.write().unwrap();
+                                info!("Loading token: {}", &parts[1]);
+                                cfg_write.tokens.insert(parts[1].to_string(), token);
+                                drop(cfg_write);
+                            }
+                            Err(e) => {
+                                error!("error loading datastore configuration {}", e);
+                            }
+                        },
                         (3, "auth") => match serde_json::from_str(&result) {
                             Ok(log_auth) => {
                                 let mut cfg_write = cfg2.write().unwrap();
@@ -350,5 +368,6 @@ enum MetaConfigObject {
     Log(Log),
     DataStore(DataStore),
     LogAuth((String, String, LogAuth)),
+    Token(Token),
     Unknown,
 }

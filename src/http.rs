@@ -125,9 +125,18 @@ impl Http {
             Ok(val) => val,
             Err(_) => return HeaderToken::InvalidToken,
         };
+        if access_key.len() != 48 {
+            return HeaderToken::InvalidToken;
+        }
         let cfg = self.config.read().unwrap();
-        match cfg.auth.get(access_key) {
-            Some(_) => HeaderToken::Token(access_key.to_string()),
+        match cfg.tokens.get(&access_key[0..16]) {
+            Some(token) => {
+                if &token.secret_key == &access_key[16..48] {
+                    HeaderToken::Token(access_key.to_string())
+                } else {
+                    HeaderToken::InvalidToken
+                }
+            }
             None => HeaderToken::InvalidToken,
         }
     }
@@ -208,16 +217,19 @@ enum HeaderToken {
 
 #[cfg(test)]
 mod http_tests {
-    use crate::config::{Config, LogAuth, Server};
+    use crate::config::{Config, LogAuth, Server, Token};
 
     use super::*;
+
+    static VALID_TOKEN: &str = "TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1";
 
     // Generates a Config object with only one auth item for one log
     fn get_auth_config_for(token: String, log_name: String) -> Config {
         let mut log_auth_map: HashMap<String, LogAuth> = HashMap::new();
         log_auth_map.insert(
-            log_name,
+            log_name.clone(),
             LogAuth {
+                log_name: log_name,
                 api: Vec::new(),
                 expire: "".to_string(),
                 status: "".to_string(),
@@ -225,7 +237,19 @@ mod http_tests {
         );
 
         let mut auth = HashMap::new();
-        auth.insert(token.clone(), log_auth_map);
+        auth.insert(token[0..16].to_string(), log_auth_map);
+
+        let mut tokens = HashMap::new();
+        tokens.insert(
+            token[0..16].to_string(),
+            Token {
+                access_key: token[0..16].to_string(),
+                secret_key: token[16..48].to_string(),
+                description: None,
+                is_admin: false,
+                enabled: true,
+            },
+        );
 
         Config {
             server: Server {
@@ -238,6 +262,7 @@ mod http_tests {
                 pkcs12_password: None,
             },
             datastore: HashMap::new(),
+            tokens: tokens,
             log: HashMap::new(),
             auth: auth,
         }
@@ -280,19 +305,19 @@ mod http_tests {
     #[test]
     fn valid_token_header() {
         run_test_validate_token_from_header(ValidTokenHeaderTest {
-            valid_token: "TOKEN1".to_string(),
+            valid_token: VALID_TOKEN.to_string(),
             valid_log: "mylog".to_string(),
             method: "PUT".to_string(),
-            headers: vec![("MINSQL-TOKEN".to_string(), "TOKEN1".to_string())],
-            expected: HeaderToken::Token("TOKEN1".to_string()),
-            expected_token: Some("TOKEN1".to_string()),
+            headers: vec![("MINSQL-TOKEN".to_string(), VALID_TOKEN.to_string())],
+            expected: HeaderToken::Token(VALID_TOKEN.to_string()),
+            expected_token: Some(VALID_TOKEN.to_string()),
         })
     }
 
     #[test]
     fn missing_token_header() {
         run_test_validate_token_from_header(ValidTokenHeaderTest {
-            valid_token: "TOKEN1".to_string(),
+            valid_token: VALID_TOKEN.to_string(),
             valid_log: "mylog".to_string(),
             method: "PUT".to_string(),
             headers: Vec::new(),
@@ -304,7 +329,7 @@ mod http_tests {
     #[test]
     fn invalid_token_header() {
         run_test_validate_token_from_header(ValidTokenHeaderTest {
-            valid_token: "TOKEN1".to_string(),
+            valid_token: VALID_TOKEN.to_string(),
             valid_log: "mylog".to_string(),
             method: "PUT".to_string(),
             headers: vec![("MINSQL-TOKEN".to_string(), "TOKEN2".to_string())],

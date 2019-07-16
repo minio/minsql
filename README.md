@@ -77,6 +77,7 @@ docker-compose up
 ```
 
 ### Environment variables
+
 | Environment                  | Description                                       |
 | -------------                | -------------                                     |
 | MINSQL_METABUCKET_NAME       | Name of the meta bucket                           |
@@ -86,8 +87,82 @@ docker-compose up
 | MINSQL_PKCS12_CERT           | *Optional:* location to a pkcs12 certificate.     |
 | MINSQL_PKCS12_PASSWORD       | *Optional:* password to unlock the certificate.   |
 
+### Configuring
+
+To start storing logs you need to setup a `DataStore`, `Log`, `Token` and a `Authorization` on MinSQL, this can be done using the admin REST APIs.
+
+To get our sample code going we are going to:
+
+1. `minioplay` datastore
+1. `mylog` log
+1. a token
+1. authorize the token to our log
+
+#### Add a sample datastore
+Our sample datastore will be pointing to `play`, a demo instance of MinIO.
+
+```bash
+curl -X POST \
+  http://127.0.0.1:9999/api/datastores \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "bucket" : "play-minsql",
+  "endpoint" : "https://play.minio.io:9000",
+  "prefix" : "",
+  "name" : "minioplay",
+  "access_key" : "Q3AM3UQ867SPQQA43P2F",
+  "secret_key" : "zuf+tfteSlswRu7BJ86wekitnifILbZam1KYY3TG"
+}'
+```
+
+#### Add a Sample log
+We are going to add a log `mylog` that stores it's contents on the `minioplay` datastore. 
+```bash
+curl -X POST \
+  http://127.0.0.1:9999/api/logs \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "name" : "mylog",
+  "datastores" : [
+    "minioplay",
+  ],
+  "commit_window" : "5s"
+}'
+```
+
+#### Create a sample token
+
+We are going to generate a token with a hardcoded token `abcdefghijklmnopabcdefghijklmnopabcdefghijklmnop`
+
+```bash
+curl -X POST \
+  http://127.0.0.1:9999/api/tokens \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "access_key" : "abcdefghijklmnop",
+  "secret_key" : "abcdefghijklmnopabcdefghijklmnop",
+  "description" : "test",
+  "is_admin" : true,
+  "enabled" : false
+}'
+```
+
+#### Authorize token to log
+
+Finally, we are going to authorize our new token to access `mylog`
+
+```bash
+curl -X POST \
+  http://127.0.0.1:9999/api/auth/abcdefghijklmnop \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "log_name" : "mylog",
+  "api" : ["search","store"]
+}'
+```
+
 ## Storing logs
-For a log `mylog` defined on the configuration we can store logs on *MinSQL* by performing a `PUT` to your `MinSQL` instance
+For a log `mylog` defined on the configuration we can store logs on MinSQL by performing a `PUT` to your MinSQL instance
 
 ```
 curl -X PUT \

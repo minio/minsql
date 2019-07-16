@@ -40,6 +40,8 @@ pub struct Config {
     #[serde(default = "HashMap::new")]
     pub log: HashMap<String, Log>,
     #[serde(default = "HashMap::new")]
+    pub tokens: HashMap<String, Token>,
+    #[serde(default = "HashMap::new")]
     pub auth: HashMap<String, HashMap<String, LogAuth>>,
 }
 
@@ -71,8 +73,28 @@ pub struct Log {
     pub commit_window: String,
 }
 
+// To circumvent serde(default=false) limitation https://github.com/serde-rs/serde/issues/1030
+fn def_true() -> bool {
+    true
+}
+fn def_false() -> bool {
+    false
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Token {
+    pub access_key: String,
+    pub secret_key: String,
+    pub description: Option<String>,
+    #[serde(default = "def_false")]
+    pub is_admin: bool,
+    #[serde(default = "def_true")]
+    pub enabled: bool,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct LogAuth {
+    pub log_name: String,
     pub api: Vec<String>,
     pub expire: String,
     pub status: String,
@@ -85,6 +107,7 @@ impl Config {
             datastore: HashMap::new(),
             log: HashMap::new(),
             auth: HashMap::new(),
+            tokens: HashMap::new(),
         }
     }
 

@@ -134,6 +134,7 @@ impl ApiLogs {
         let cfg_read = cfg.read().unwrap();
         // validate the datastores
         if let Some(serde_json::Value::Array(datastores_value)) = log.get("datastores") {
+            let mut datastores: Vec<String> = Vec::new();
             for ds_name_value in datastores_value {
                 if let serde_json::Value::String(ds_name) = ds_name_value {
                     if cfg_read.datastore.contains_key(ds_name) == false {
@@ -141,9 +142,12 @@ impl ApiLogs {
                             "{} is an invalid datastore name",
                             &ds_name
                         )));
+                    } else {
+                        datastores.push(ds_name.clone());
                     }
                 }
             }
+            current_log.datastores = datastores;
         }
 
         // Validate name

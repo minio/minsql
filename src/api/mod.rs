@@ -13,18 +13,24 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use crate::api::api_datastores::ApiDataStores;
-use crate::api::logs::ApiLogs;
-use crate::config::Config;
-use crate::http::{return_404, ResponseFuture};
+use std::sync::{Arc, RwLock};
+
 use futures::future;
 use hyper::{header, Body, Method, Request, Response};
 use serde::Serialize;
 use serde_derive::Serialize;
-use std::sync::{Arc, RwLock};
 
-pub mod api_datastores;
+use crate::api::auth::ApiAuth;
+use crate::api::datastores::ApiDataStores;
+use crate::api::logs::ApiLogs;
+use crate::api::tokens::ApiTokens;
+use crate::config::Config;
+use crate::http::{return_404, ResponseFuture};
+
+pub mod auth;
+pub mod datastores;
 pub mod logs;
+pub mod tokens;
 
 pub struct Api {
     config: Arc<RwLock<Config>>,
@@ -39,6 +45,10 @@ impl Api {
     pub fn router(&self, req: Request<Body>, path_parts: Vec<&str>) -> ResponseFuture {
         match path_parts.get(1) {
             // delegate to proper module
+            Some(&"auth") => {
+                let auths = ApiAuth::new(Arc::clone(&self.config));
+                auths.route(req, path_parts)
+            }
             Some(&"datastores") => {
                 let datastores = ApiDataStores::new(Arc::clone(&self.config));
                 datastores.route(req, path_parts)
@@ -47,10 +57,15 @@ impl Api {
                 let logs = ApiLogs::new(Arc::clone(&self.config));
                 logs.route(req, path_parts)
             }
+            Some(&"tokens") => {
+                let auths = ApiTokens::new(Arc::clone(&self.config));
+                auths.route(req, path_parts)
+            }
             _ => Box::new(future::ok(return_404())),
         }
     }
 }
+
 /// Standard REST behavior.
 pub trait ViewSet {
     // Fulfills a GET operation, which should list items
