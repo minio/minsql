@@ -100,15 +100,6 @@ impl ApiAuth {
             if log_name == "" {
                 return Err(return_400("Log name cannot be empty"));
             }
-            // validate log_name uniqueness
-            if let Some(log_map) = cfg_read.auth.get(token_access_key_clone) {
-                if log_map.contains_key(log_name) {
-                    return Err(return_400(&format!(
-                        "Auth already given for log {} in token {}",
-                        &log_name, token_access_key_clone,
-                    )));
-                }
-            }
             new_log_auth.log_name = log_name.clone();
         }
 

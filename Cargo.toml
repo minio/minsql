@@ -31,5 +31,6 @@ tokio = "0.1.22"
 tokio-codec = "0.1.1"
 tokio-io = "0.1.12"
 tokio-tls = "0.2.1"
+url = "1.7.2"
 uuid = { version = "0.7.4", features = ["v4"] }
 xml-rs = "0.8.0"

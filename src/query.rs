@@ -203,11 +203,8 @@ impl Query {
                             return Ok(return_400(format!("{:?}", e).as_str()));
                         }
                     };
-                    match query_c.validate_logs(&ast) {
-                        None => (),
-                        Some(_) => {
-                            return Ok(return_400("invalid log name"));
-                        }
+                    if let Some(_) = query_c.validate_logs(&ast) {
+                        return Ok(return_400("invalid log name"));
                     };
 
                     // Translate the SQL AST into a `QueryParsing`
@@ -431,7 +428,7 @@ impl Query {
                                 }
                             }
                         }
-                        _ => {}
+                        _ => (),
                     }
                 }
                 _ => {} // for now let's not do anything on other Variances
@@ -1248,11 +1245,8 @@ mod query_tests {
         let query_c = Query::new(cfg);
 
         let query = "INSERT INTO mylog ($line) VALES ('line')".to_string();
-        match query_c.parse_query(query.clone()) {
-            Ok(_) => (),
-            Err(_) => {
-                panic!("Expected invalid query");
-            }
+        if let Err(_) = query_c.parse_query(query.clone()) {
+            panic!("Expected invalid query");
         }
     }
 

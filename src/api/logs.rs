@@ -19,7 +19,7 @@ use futures::future::Either;
 use futures::{future, Future, Stream};
 use hyper::{header, Body, Chunk, Request, Response};
 
-use crate::api::{ListResponse, SafeOutput, ViewSet};
+use crate::api::{SafeOutput, ViewSet};
 use crate::config::{Config, Log};
 use crate::http::{return_400, return_404, return_500, ResponseFuture};
 use crate::storage::{delete_object_metabucket, put_object_metabucket};
@@ -177,18 +177,16 @@ impl ApiLogs {
 
 impl ViewSet for ApiLogs {
     /// Lists all logs
-    fn list(&self, _req: Request<Body>) -> ResponseFuture {
+    fn list(&self, req: Request<Body>) -> ResponseFuture {
         let cfg_read = self.config.read().unwrap();
         let mut logs: Vec<Log> = Vec::new();
-        for (_, ds) in &cfg_read.log {
-            logs.push(ds.clone());
+        for (_, log) in &cfg_read.log {
+            logs.push(log.clone());
         }
-        let items = ListResponse {
-            total: cfg_read.log.len(),
-            next: None,
-            previous: None,
-            results: logs,
-        };
+        // sort items
+        logs.sort_by(|a, b| a.name.cmp(&b.name));
+        // paginate
+        let items = self.paginate(req, logs);
         Box::new(self.build_response(items))
     }
 

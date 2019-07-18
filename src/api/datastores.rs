@@ -1,11 +1,3 @@
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-
-use futures::future::Either;
-use futures::stream::Stream;
-use futures::{future, Future};
-use hyper::{header, Body, Chunk, Request, Response};
-
 // This file is part of MinSQL
 // Copyright (c) 2019 MinIO, Inc.
 //
@@ -21,7 +13,15 @@ use hyper::{header, Body, Chunk, Request, Response};
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
-use crate::api::{ListResponse, SafeOutput, ViewSet};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+use futures::future::Either;
+use futures::stream::Stream;
+use futures::{future, Future};
+use hyper::{header, Body, Chunk, Request, Response};
+
+use crate::api::{SafeOutput, ViewSet};
 use crate::config::{Config, DataStore};
 use crate::http::{return_400, return_404, return_500, ResponseFuture};
 use crate::storage::{delete_object_metabucket, put_object_metabucket};
@@ -174,18 +174,16 @@ impl ApiDataStores {
 }
 
 impl ViewSet for ApiDataStores {
-    fn list(&self, _req: Request<Body>) -> ResponseFuture {
+    fn list(&self, req: Request<Body>) -> ResponseFuture {
         let cfg_read = self.config.read().unwrap();
         let mut datastores: Vec<DataStore> = Vec::new();
         for (_, ds) in &cfg_read.datastore {
             datastores.push(ds.clone());
         }
-        let items = ListResponse {
-            total: cfg_read.datastore.len(),
-            next: None,
-            previous: None,
-            results: datastores,
-        };
+        // sort items
+        datastores.sort_by(|a, b| a.name.cmp(&b.name));
+        // paginate
+        let items = self.paginate(req, datastores);
         Box::new(self.build_response(items))
     }
 
