@@ -183,6 +183,24 @@ impl Query {
         let cfg = Arc::clone(&self.config);
         let query_c = Query::new(cfg);
 
+        // Check for `MINSQL-PREVIEW: true` header
+        let preview_query = match &req.headers().get("MINSQL-PREVIEW") {
+            Some(val) => match val.to_str() {
+                Ok(v) => {
+                    if v.to_string().to_lowercase() == "true" {
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Err(e) => {
+                    error!("Could not parse preview header: {}", e);
+                    false
+                }
+            },
+            None => false,
+        };
+
         let query_state_holder = Arc::new(RwLock::new(StateHolder::new()));
         let query_state_holder = Arc::clone(&query_state_holder);
         // A web api to run against
@@ -246,7 +264,10 @@ impl Query {
                             let log = cfg_read.get_log(&q_parse.log_name).unwrap();
                             let log_datastores = &log.datastores;
 
-                            let limit = q_parse.limit.unwrap_or(std::u64::MAX);
+                            let mut limit = q_parse.limit.unwrap_or(std::u64::MAX);
+                            if preview_query {
+                                limit = 20 as u64;
+                            }
 
                             let logs_ds_len = log_datastores.len();
 
