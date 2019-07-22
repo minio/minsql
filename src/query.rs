@@ -33,6 +33,7 @@ use tokio::sync::mpsc;
 
 use bitflags::bitflags;
 use lazy_static::lazy_static;
+use serde_json::json;
 
 use crate::auth::Auth;
 use crate::combinators::take_from_iterable::TakeFromIterable;
@@ -829,43 +830,42 @@ pub fn extract_smart_fields(
     }
 }
 
+/// Builds the resulting line output, this function will consume the projection values map
 fn mk_output_line(
-    projection_values: HashMap<String, Option<String>>,
+    mut projection_values: HashMap<String, Option<String>>,
     query_data: &QueryParsing,
     line: String,
 ) -> Option<String> {
     if query_data.read_all {
-        Some(line)
+        let output_obj = json!({
+        "$line": line,
+        });
+        let outstring = serde_json::to_string(&output_obj).unwrap();
+        Some(outstring)
     } else {
         // build the result iterate over the ordered resulting
         // projections
-        let mut field_values: Vec<&Option<String>> = Vec::new();
+        //        let mut field_values: Vec<&Option<String>> = Vec::new();
+        let mut mappy: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
         for i in 0..query_data.projections_ordered.len() {
             let proj = &query_data.projections_ordered[i];
             if projection_values.contains_key(proj) {
-                let val = projection_values.get(proj).unwrap();
-                field_values.push(&val);
+                if let Some(v) = projection_values.remove(proj) {
+                    match v {
+                        Some(val) => {
+                            mappy.insert(proj.to_string(), serde_json::Value::String(val));
+                        }
+                        None => {
+                            mappy.insert(proj.to_string(), serde_json::Value::Null);
+                        }
+                    }
+                }
+            } else {
+                mappy.insert(proj.to_string(), serde_json::Value::Null);
             }
         }
 
-        // Avoid cloning projection values, project `None` as ""
-        let mut outstring = "".to_string();
-        for i in 0..field_values.len() {
-            let s = field_values[i];
-            match s {
-                Some(sv) => {
-                    outstring.push_str(sv);
-                }
-                None => {
-                    outstring.push_str("");
-                }
-            }
-
-            if i + 1 < field_values.len() {
-                outstring.push_str(" ");
-            }
-        }
-        // TODO: When adding CSV output, change the separator
+        let outstring = serde_json::to_string(&mappy).unwrap();
         Some(outstring)
     }
 }
