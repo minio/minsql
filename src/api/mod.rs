@@ -13,6 +13,7 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use futures::future;
@@ -25,7 +26,7 @@ use crate::api::datastores::ApiDataStores;
 use crate::api::logs::ApiLogs;
 use crate::api::tokens::ApiTokens;
 use crate::config::Config;
-use crate::http::{return_404, ResponseFuture};
+use crate::http::{return_401, return_404, HeaderToken, Http, ResponseFuture};
 
 pub mod auth;
 pub mod datastores;
@@ -43,6 +44,30 @@ impl Api {
 
     /// Routes a request to the proper module, or returns a 404 if nothing is matched.
     pub fn router(&self, req: Request<Body>, path_parts: Vec<&str>) -> ResponseFuture {
+        // validate access token on headers
+        let http_c = Http::new(Arc::clone(&self.config));
+        match http_c.validate_token_from_header(&req) {
+            HeaderToken::Token(token) => {
+                //validate the token is admin
+                let read_cfg = self.config.read().unwrap();
+                match read_cfg.tokens.get(&token[0..16]) {
+                    Some(tk) => {
+                        if tk.is_admin == false {
+                            return Box::new(future::ok(return_401()));
+                        }
+                    }
+                    None => {
+                        return Box::new(future::ok(return_401()));
+                    }
+                }
+            }
+            HeaderToken::InvalidToken => {
+                return Box::new(future::ok(return_401()));
+            }
+            HeaderToken::NoToken => {
+                return Box::new(future::ok(return_401()));
+            }
+        }
         match path_parts.get(1) {
             // delegate to proper module
             Some(&"auth") => {
@@ -106,6 +131,48 @@ pub trait ViewSet {
         let mut response = Response::builder();
         response.header(header::CONTENT_TYPE, "application/json");
         Box::new(future::ok(response.body(body).unwrap()))
+    }
+
+    /// Takes a list of objects, the request and returns a sublist of items (aka page)
+    fn paginate<T>(&self, request: Request<Body>, obj: Vec<T>) -> ListResponse<T>
+    where
+        T: Serialize,
+        T: SafeOutput,
+    {
+        let query_params = self.parse_query_parameters(&request);
+
+        let offset: usize = query_params
+            .get("offset")
+            .unwrap_or(&"0".to_string())
+            .parse()
+            .unwrap_or(0);
+
+        let limit: usize = query_params
+            .get("limit")
+            .unwrap_or(&"10".to_string())
+            .parse()
+            .unwrap_or(10);
+
+        ListResponse {
+            total: obj.len(),
+            next: None,
+            previous: None,
+            results: obj.into_iter().skip(offset).take(limit).collect(),
+        }
+    }
+
+    /// Parses the query parameters from a uri on a request and returns a `HashMap<String,String>`
+    /// with (key,value) note that repeated values overwrite over the previous value under the same
+    /// key.
+    fn parse_query_parameters(&self, req: &Request<Body>) -> HashMap<String, String> {
+        let mut query_params: HashMap<String, String> = HashMap::new();
+        if let Some(query) = req.uri().query() {
+            let parse = url::form_urlencoded::parse(&query.as_ref());
+            for (key, value) in parse {
+                query_params.insert(key.to_string(), value.to_string());
+            }
+        }
+        query_params
     }
 }
 

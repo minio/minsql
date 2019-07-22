@@ -82,10 +82,13 @@ impl MinSQL {
 
         let meta_cfg = Arc::clone(&self.config);
         // initial load of configuraiton
+        let start = Instant::now();
         tokio::run(future::lazy(|| {
             let meta_c = Meta::new(meta_cfg);
             meta_c.load_config_from_metabucket()
         }));
+        let duration = start.elapsed();
+        info!("Loading configuration from metabucket took: {:?}", duration);
 
         let read_cfg = self.config.read().unwrap();
         let pkcs12_cert = read_cfg.server.pkcs12_cert.clone();

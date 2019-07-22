@@ -116,7 +116,7 @@ impl Http {
 
     /// Returns a `HeaderToken` with the details regarding the presence/validity of the auth token
     /// in the request.
-    fn validate_token_from_header(&self, req: &Request<Body>) -> HeaderToken {
+    pub fn validate_token_from_header(&self, req: &Request<Body>) -> HeaderToken {
         let access_key_result = match req.headers().get("MINSQL-TOKEN") {
             Some(val) => val.to_str(),
             None => return HeaderToken::NoToken,
@@ -209,7 +209,7 @@ pub fn return_400(message: &str) -> Response<Body> {
 
 /// Represents the presence of a token in the header and whether it can be read as valid ASCII.
 #[derive(PartialEq, Debug)]
-enum HeaderToken {
+pub enum HeaderToken {
     NoToken,
     InvalidToken,
     Token(String),

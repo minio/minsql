@@ -172,11 +172,8 @@ impl Ingest {
             let cfg = Arc::clone(&self.config);
             let res = write_to_datastore(cfg, &log_name, flushed_data, total_bytes as i64)
                 .then(|we| {
-                    match &we {
-                        Ok(_) => (),
-                        Err(e) => {
-                            error!("Problem flushing data out!! {:?}", e);
-                        }
+                    if let Err(e) = &we {
+                        error!("Problem flushing data out!! {:?}", e);
                     };
                     we
                 })

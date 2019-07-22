@@ -23,7 +23,7 @@ use hyper::{header, Body, Chunk, Request, Response};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 
-use crate::api::{ListResponse, SafeOutput, ViewSet};
+use crate::api::{SafeOutput, ViewSet};
 use crate::config::{Config, Token};
 use crate::http::{return_400, return_404, return_500, ResponseFuture};
 use crate::storage::{delete_object_metabucket, put_object_metabucket};
@@ -190,18 +190,16 @@ impl ApiTokens {
 }
 
 impl ViewSet for ApiTokens {
-    fn list(&self, _req: Request<Body>) -> ResponseFuture {
+    fn list(&self, req: Request<Body>) -> ResponseFuture {
         let cfg_read = self.config.read().unwrap();
         let mut tokens: Vec<Token> = Vec::new();
         for (_, token) in &cfg_read.tokens {
             tokens.push(token.clone());
         }
-        let items = ListResponse {
-            total: cfg_read.tokens.len(),
-            next: None,
-            previous: None,
-            results: tokens,
-        };
+        // sort
+        tokens.sort_by(|a, b| a.access_key.cmp(&b.access_key));
+        // paginate
+        let items = self.paginate(req, tokens);
         Box::new(self.build_response(items))
     }
 
