@@ -64,6 +64,10 @@ bitflags! {
     }
 }
 
+lazy_static! {
+    static ref SMART_FIELDS_RE: Regex = Regex::new(SMART_FIELDS_RAW_RE).unwrap();
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct PositionalColumn {
     position: i32,
@@ -340,9 +344,6 @@ impl Query {
         access_token: &String,
         query: Statement,
     ) -> Result<(Statement, QueryParsing), ProcessingQueryError> {
-        lazy_static! {
-            static ref SMART_FIELDS_RE: Regex = Regex::new(SMART_FIELDS_RAW_RE).unwrap();
-        };
         // find the table they want to query
         let some_table = match query {
             Statement::Query(ref q) => {
@@ -417,73 +418,20 @@ impl Query {
             match proj {
                 SelectItem::UnnamedExpr(ref ast) => {
                     // we have an identifier
-                    match ast {
-                        Expr::Identifier(ref identifier) => {
-                            let id_name = &identifier[1..];
-                            let position = id_name.parse::<i32>().unwrap_or(-1);
-                            // if we were able to parse identifier as an i32 it's a positional
-                            if position > 0 {
-                                positional_fields.push(PositionalColumn {
-                                    position: position,
-                                    alias: identifier.clone(),
-                                });
-                                projections_ordered.push(identifier.clone());
-                            } else {
-                                // try to parse as as smart field
-                                for smart_field_match in SMART_FIELDS_RE.captures_iter(identifier) {
-                                    let typed = smart_field_match[2].to_string();
-                                    // Default the position to 1 unless there's a matching group for position
-                                    let pos = smart_field_match
-                                        .get(4)
-                                        .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
-                                    // we use this set to keep track of active smart fields
-                                    smart_fields_set.insert(typed.clone());
-                                    // track the smartfield
-                                    smart_fields.push(SmartColumn {
-                                        typed: typed.clone(),
-                                        position: pos,
-                                        alias: identifier.clone(),
-                                        subfield: None,
-                                    });
-                                    // record the order or extraction
-                                    projections_ordered.push(identifier.clone());
-                                }
-                            }
+                    match detect_field_for_ast(ast) {
+                        FieldFound::PositionalField(positional) => {
+                            projections_ordered.push(positional.alias.clone());
+                            positional_fields.push(positional);
                         }
-                        Expr::CompoundIdentifier(ref identifier) => {
-                            let id_name = &identifier[0][1..];
-                            let position = id_name.parse::<i32>().unwrap_or(-1);
-                            // We don't do compound identifiers on positional arguments, only smart
-                            // fields
-                            if position < 0 {
-                                // try to parse as as smart field
-                                for smart_field_match in
-                                    SMART_FIELDS_RE.captures_iter(&identifier[0][..])
-                                {
-                                    let typed = smart_field_match[2].to_string();
-                                    // Default the position to 1 unless there's a matching group for position
-                                    let pos = smart_field_match
-                                        .get(4)
-                                        .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
-                                    // get subfield
-                                    let subfield = Some(identifier[1..].join("."));
-                                    // we use this set to keep track of active smart fields
-                                    smart_fields_set.insert(typed.clone());
-                                    // track the smartfield
-                                    smart_fields.push(SmartColumn {
-                                        typed: typed.clone(),
-                                        position: pos,
-                                        alias: identifier.join(".").clone(),
-                                        subfield: subfield,
-                                    });
-                                    // record the order or extraction
-                                    projections_ordered.push(identifier.join("."));
-                                }
-                            }
+                        FieldFound::SmartField(smart) => {
+                            // we use this set to keep track of active smart fields
+                            smart_fields_set.insert(smart.typed.clone());
+                            // record the order or extraction
+                            projections_ordered.push(smart.alias.clone());
+                            // track the smartfield
+                            smart_fields.push(smart);
                         }
-                        x => {
-                            info!("Use un unhandled ast {:?}", &x);
-                        }
+                        _ => (),
                     }
                 }
                 _ => {} // for now let's not do anything on other Variances
@@ -623,9 +571,6 @@ fn process_fields_for_ast(
     smart_fields: &mut Vec<SmartColumn>,
     smart_fields_set: &mut HashSet<String>,
 ) {
-    lazy_static! {
-        static ref SMART_FIELDS_RE: Regex = Regex::new(SMART_FIELDS_RAW_RE).unwrap();
-    };
     match ast_node {
         Expr::Nested(nested_ast) => {
             process_fields_for_ast(
@@ -636,135 +581,31 @@ fn process_fields_for_ast(
             );
         }
         Expr::IsNotNull(ast) => {
-            match **ast {
-                Expr::Identifier(ref identifier) => {
-                    //positional or smart?
-                    let id_name = &identifier[1..];
-                    let position = id_name.parse::<i32>().unwrap_or(-1);
-                    // if we were able to parse identifier as an i32 it's a positional
-                    if position > 0 {
-                        positional_fields.push(PositionalColumn {
-                            position: position,
-                            alias: identifier.clone(),
-                        });
-                    } else {
-                        // try to parse as as smart field
-                        for smart_field_match in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
-                            let typed = smart_field_match[2].to_string();
-                            // Default the position to 1 unless there's a matching group for position
-                            let pos = smart_field_match
-                                .get(4)
-                                .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
-                            // we use this set to keep track of active smart fields
-                            smart_fields_set.insert(typed.clone());
-                            // track the smartfield
-                            smart_fields.push(SmartColumn {
-                                typed: typed.clone(),
-                                position: pos,
-                                alias: identifier.clone(),
-                                subfield: None,
-                            });
-                        }
-                    }
+            match detect_field_for_ast(&**ast) {
+                FieldFound::PositionalField(positional) => {
+                    positional_fields.push(positional);
                 }
-                Expr::CompoundIdentifier(ref identifier) => {
-                    //positional or smart?
-                    let id_name = &identifier[0][1..];
-                    let position = id_name.parse::<i32>().unwrap_or(-1);
-                    // no positions for compound identifiers
-                    if position < 0 {
-                        // try to parse as as smart field
-                        for smart_field_match in SMART_FIELDS_RE.captures_iter(&identifier[0][..]) {
-                            let typed = smart_field_match[2].to_string();
-                            // Default the position to 1 unless there's a matching group for position
-                            let pos = smart_field_match
-                                .get(4)
-                                .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
-                            // get subfield
-                            let subfield = Some(identifier[1..].join("."));
-                            // we use this set to keep track of active smart fields
-                            smart_fields_set.insert(typed.clone());
-                            // track the smartfield
-                            smart_fields.push(SmartColumn {
-                                typed: typed.clone(),
-                                position: pos,
-                                alias: identifier.join(".").clone(),
-                                subfield: subfield,
-                            });
-                        }
-                    }
+                FieldFound::SmartField(smart) => {
+                    // we use this set to keep track of active smart fields
+                    smart_fields_set.insert(smart.typed.clone());
+                    // track the smartfield
+                    smart_fields.push(smart);
                 }
-                ref x => {
-                    info!("Use un unhandled ast {:?}", x);
-                }
+                _ => (),
             }
         }
         Expr::IsNull(ast) => {
-            match **ast {
-                Expr::Identifier(ref identifier) => {
-                    //positional or smart?
-                    let id_name = &identifier[1..];
-                    let position = id_name.parse::<i32>().unwrap_or(-1);
-                    // if we were able to parse identifier as an i32 it's a positional
-                    if position > 0 {
-                        positional_fields.push(PositionalColumn {
-                            position: position,
-                            alias: identifier.clone(),
-                        });
-                    } else {
-                        // try to parse as as smart field
-                        for smart_field_match in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
-                            let typed = smart_field_match[2].to_string();
-                            // Default the position to 1 unless there's a matching group for position
-                            let pos = smart_field_match
-                                .get(4)
-                                .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
-                            // get subfield
-                            let subfield = smart_field_match
-                                .get(6)
-                                .map_or(None, |m| Some(m.as_str().to_string()));
-                            // we use this set to keep track of active smart fields
-                            smart_fields_set.insert(typed.clone());
-                            // track the smartfield
-                            smart_fields.push(SmartColumn {
-                                typed: typed.clone(),
-                                position: pos,
-                                alias: identifier.clone(),
-                                subfield: subfield,
-                            });
-                        }
-                    }
+            match detect_field_for_ast(&**ast) {
+                FieldFound::PositionalField(positional) => {
+                    positional_fields.push(positional);
                 }
-                Expr::CompoundIdentifier(ref identifier) => {
-                    //positional or smart?
-                    let id_name = &identifier[0][1..];
-                    let position = id_name.parse::<i32>().unwrap_or(-1);
-                    // Compounds cannot be positional
-                    if position < 0 {
-                        // try to parse as as smart field
-                        for smart_field_match in SMART_FIELDS_RE.captures_iter(&identifier[0][..]) {
-                            let typed = smart_field_match[2].to_string();
-                            // Default the position to 1 unless there's a matching group for position
-                            let pos = smart_field_match
-                                .get(4)
-                                .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
-                            // get subfield
-                            let subfield = Some(identifier[1..].join("."));
-                            // we use this set to keep track of active smart fields
-                            smart_fields_set.insert(typed.clone());
-                            // track the smartfield
-                            smart_fields.push(SmartColumn {
-                                typed: typed.clone(),
-                                position: pos,
-                                alias: identifier.join(".").clone(),
-                                subfield: subfield,
-                            });
-                        }
-                    }
+                FieldFound::SmartField(smart) => {
+                    // we use this set to keep track of active smart fields
+                    smart_fields_set.insert(smart.typed.clone());
+                    // track the smartfield
+                    smart_fields.push(smart);
                 }
-                ref x => {
-                    info!("Use un unhandled ast {:?}", x);
-                }
+                _ => (),
             }
         }
         Expr::BinaryOp { left, op, right } => {
@@ -788,76 +629,17 @@ fn process_fields_for_ast(
                     );
                 }
                 _ => {
-                    match **left {
-                        Expr::Identifier(ref identifier) => {
-                            //positional or smart?
-                            let id_name = &identifier[1..];
-                            let position = id_name.parse::<i32>().unwrap_or(-1);
-                            // if we were able to parse identifier as an i32 it's a positional
-                            if position > 0 {
-                                positional_fields.push(PositionalColumn {
-                                    position: position,
-                                    alias: identifier.clone(),
-                                });
-                            } else {
-                                // try to parse as as smart field
-                                for smart_field_match in
-                                    SMART_FIELDS_RE.captures_iter(&identifier[..])
-                                {
-                                    let typed = smart_field_match[2].to_string();
-                                    // Default the position to 1 unless there's a matching group for position
-                                    let pos = smart_field_match
-                                        .get(4)
-                                        .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
-                                    // get subfield
-                                    let subfield = smart_field_match
-                                        .get(6)
-                                        .map_or(None, |m| Some(m.as_str().to_string()));
-                                    // we use this set to keep track of active smart fields
-                                    smart_fields_set.insert(typed.clone());
-                                    // track the smartfield
-                                    smart_fields.push(SmartColumn {
-                                        typed: typed.clone(),
-                                        position: pos,
-                                        alias: identifier.clone(),
-                                        subfield: subfield,
-                                    });
-                                }
-                            }
+                    match detect_field_for_ast(&**left) {
+                        FieldFound::PositionalField(positional) => {
+                            positional_fields.push(positional);
                         }
-
-                        Expr::CompoundIdentifier(ref identifier) => {
-                            //positional or smart?
-                            let id_name = &identifier[0][1..];
-                            let position = id_name.parse::<i32>().unwrap_or(-1);
-                            // compounds have no positionals
-                            if position < 0 {
-                                // try to parse as as smart field
-                                for smart_field_match in
-                                    SMART_FIELDS_RE.captures_iter(&identifier[0][..])
-                                {
-                                    let typed = smart_field_match[2].to_string();
-                                    // Default the position to 1 unless there's a matching group for position
-                                    let pos = smart_field_match
-                                        .get(4)
-                                        .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
-                                    // get subfield
-                                    let subfield = Some(identifier[1..].join("."));
-                                    // we use this set to keep track of active smart fields
-                                    smart_fields_set.insert(typed.clone());
-                                    // track the smartfield
-                                    smart_fields.push(SmartColumn {
-                                        typed: typed.clone(),
-                                        position: pos,
-                                        alias: identifier.join(".").clone(),
-                                        subfield: subfield,
-                                    });
-                                }
-                            }
+                        FieldFound::SmartField(smart) => {
+                            // we use this set to keep track of active smart fields
+                            smart_fields_set.insert(smart.typed.clone());
+                            // track the smartfield
+                            smart_fields.push(smart);
                         }
-                        ref x => {
-                            info!("Use un unhandled ast {:?}", x);
-                        }
+                        _ => (),
                     }
                 }
             }
@@ -1181,6 +963,71 @@ impl StateHolder {
     fn new() -> StateHolder {
         StateHolder {
             query_parsing: Vec::new(),
+        }
+    }
+}
+
+enum FieldFound {
+    SmartField(SmartColumn),
+    PositionalField(PositionalColumn),
+    Unknown,
+}
+
+fn detect_field_for_ast(ast: &Expr) -> FieldFound {
+    match ast {
+        Expr::Identifier(ref identifier) => {
+            let id_name = &identifier[1..];
+            let position = id_name.parse::<i32>().unwrap_or(-1);
+            // if we were able to parse identifier as an i32 it's a positional
+            if position > 0 {
+                FieldFound::PositionalField(PositionalColumn {
+                    position: position,
+                    alias: identifier.clone(),
+                })
+            } else {
+                // try to parse as as smart field
+                if let Some(smart_field_match) = SMART_FIELDS_RE.captures(identifier) {
+                    let typed = smart_field_match[2].to_string();
+                    // Default the position to 1 unless there's a matching group for position
+                    let pos = smart_field_match
+                        .get(4)
+                        .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
+                    // build
+                    return FieldFound::SmartField(SmartColumn {
+                        typed: typed.clone(),
+                        position: pos,
+                        alias: identifier.clone(),
+                        subfield: None,
+                    });
+                } else {
+                    FieldFound::Unknown
+                }
+            }
+        }
+        Expr::CompoundIdentifier(ref identifier) => {
+            // try to parse as as smart field
+            if let Some(smart_field_match) = SMART_FIELDS_RE.captures(&identifier[0][..]) {
+                let typed = smart_field_match[2].to_string();
+                // Default the position to 1 unless there's a matching group for position
+                let pos = smart_field_match
+                    .get(4)
+                    .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
+                // get subfield
+                let subfield = Some(identifier[1..].join("."));
+                // build
+                return FieldFound::SmartField(SmartColumn {
+                    typed: typed.clone(),
+                    position: pos,
+                    alias: identifier.join(".").clone(),
+                    subfield: subfield,
+                });
+            } else {
+                FieldFound::Unknown
+            }
+        }
+        x => {
+            info!("Use un unhandled ast {:?}", &x);
+            FieldFound::Unknown
         }
     }
 }
