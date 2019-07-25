@@ -65,6 +65,14 @@ bitflags! {
 }
 
 lazy_static! {
+    static ref IP_RE :Regex= Regex::new(r"(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))").unwrap();
+    static ref EMAIL_RE :Regex= Regex::new(r"([\w\.!#$%&'*+\-=?\^_`{|}~]+@([\w\d-]+\.)+[\w]{2,4})").unwrap();
+    // TODO: This regex matches a fairly simple date format, improve : 2019-05-23
+    static ref DATE_RE :Regex= Regex::new(r"((19[789]\d|2\d{3})[-/](0[1-9]|1[1-2])[-/](0[1-9]|[1-2][0-9]|3[0-1]*))|((0[1-9]|[1-2][0-9]|3[0-1]*)[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|(0[1-9]|1[1-2]))[-/](19[789]\d|2\d{3}))").unwrap();
+    static ref QUOTED_RE :Regex= Regex::new("((\"(.*?)\")|'(.*?)')").unwrap();
+    static ref URL_RE :Regex= Regex::new(r#"(https?|ftp)://[^\s/$.?#].[^()\]\[\s]*"#).unwrap();
+    static ref PHONE_RE :Regex= Regex::new(r#"[\(]?(\d{3})[\)-]?[- ]?(\d{3})[- ]?(\d{4})"#).unwrap();
+    static ref USER_AGENT_RE :Regex= Regex::new(r#""((Mozilla|Links).*? \(.*?\)( .*?[0-9]{1,3}\.[0-9]{1,3}\.?[0-9]{0,3})?)""#).unwrap();
     static ref SMART_FIELDS_RE: Regex = Regex::new(SMART_FIELDS_RAW_RE).unwrap();
 }
 
@@ -651,17 +659,6 @@ fn process_fields_for_ast(
 }
 
 pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> {
-    // Compile the regex only once
-    lazy_static! {
-        static ref IP_RE :Regex= Regex::new(r"(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))").unwrap();
-        static ref EMAIL_RE :Regex= Regex::new(r"([\w\.!#$%&'*+\-=?\^_`{|}~]+@([\w\d-]+\.)+[\w]{2,4})").unwrap();
-        // TODO: This regex matches a fairly simple date format, improve : 2019-05-23
-        static ref DATE_RE :Regex= Regex::new(r"((19[789]\d|2\d{3})[-/](0[1-9]|1[1-2])[-/](0[1-9]|[1-2][0-9]|3[0-1]*))|((0[1-9]|[1-2][0-9]|3[0-1]*)[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|(0[1-9]|1[1-2]))[-/](19[789]\d|2\d{3}))").unwrap();
-        static ref QUOTED_RE :Regex= Regex::new("((\"(.*?)\")|'(.*?)')").unwrap();
-        static ref URL_RE :Regex= Regex::new(r#"(https?|ftp)://[^\s/$.?#].[^()\]\[\s]*"#).unwrap();
-        static ref PHONE_RE :Regex= Regex::new(r#"[\(]?(\d{3})[\)-]?[- ]?(\d{3})[- ]?(\d{4})"#).unwrap();
-        static ref USER_AGENT_RE :Regex= Regex::new(r#""((Mozilla|Links).*? \(.*?\)( .*?[0-9]{1,3}\.[0-9]{1,3}\.?[0-9]{0,3})?)""#).unwrap();
-    }
     let mut results: HashMap<String, Vec<String>> = HashMap::new();
 
     if flags.contains(ScanFlags::IP) {
