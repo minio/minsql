@@ -1,21 +1,17 @@
-# MinSQL WebUI
+# MinSQL UI
 
-The Web browser UI code is developed as a React app. It is built and
-embedded into the `minsql` executable.
+##  Commands
 
-## Required tools for development
+- `npm start` - starts a dev server and opens browser with running app
+- `npm run start:prod` - runs full prod build and serves prod bundle
+- `npm run test` - runs lint and tests
+- `npm run watch` - runs tests in watch mode
+- `npm run prettier` - runs prettier to format whole code base (`.ts` and `.scss`)
+- `npm run analyze` - runs full prod build and `webpack-bundle-analyzer` to visualize how much code is shipped (dependencies & application)
 
-1. Nodejs (>= 11.9.0)
-2. Yarn (>= 1.13.0)
+## Getting started
 
-## How to develop the Web UI?
-
-1. Make changes to the files of the React app in the current
-   directory - this is usual React development using `yarn` (>= 1.13.0)
-2. To embed the updated application into `minsql`, in the current directory run:
-   ```shell
-   $ yarn && yarn build # Builds optimized React app in `./build`
-   ```
-3. Now switch to the root of the project and build `minsql` in the usual way.
-
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+```bash
+npm install
+npm start
+```

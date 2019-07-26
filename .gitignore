@@ -4,4 +4,7 @@
 # Cargo built
 target/
 
+# static assets
+static/
+
 minsql

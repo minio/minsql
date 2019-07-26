@@ -1,0 +1,83 @@
+<!--This file is part of MinSQL-->
+<!--Copyright (c) 2019 MinIO, Inc.-->
+
+<!--This program is free software: you can redistribute it and/or modify-->
+<!--it under the terms of the GNU Affero General Public License as published by-->
+<!--the Free Software Foundation, either version 3 of the License, or-->
+<!--(at your option) any later version.-->
+
+<!--This program is distributed in the hope that it will be useful,-->
+<!--but WITHOUT ANY WARRANTY; without even the implied warranty of-->
+<!--MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the-->
+<!--GNU Affero General Public License for more details.-->
+
+<!--You should have received a copy of the GNU Affero General Public License-->
+<!--along with this program.  If not, see <http://www.gnu.org/licenses/>.-->
+<div [class]="'theme-wrapper ' + (theme$ | async)">
+
+  <mat-sidenav-container>
+
+    <mat-sidenav #sidenav mode="push">
+      <div class="branding">
+        <img [src]="logo" />
+        </div>
+      <mat-nav-list>
+        <a mat-list-item *ngFor="let item of navigationSideMenu" (click)="sidenav.close()" [routerLink]="[item.link]"
+          routerLinkActive="active">
+          {{item.label | translate}}
+        </a>
+      </mat-nav-list>
+    </mat-sidenav>
+
+    <div class="wrapper">
+      <div class="toolbar" [style.position]="(stickyHeader$ | async) ? 'fixed' : 'inherit'" >
+        <mat-toolbar >
+          <button mat-icon-button class="d-md-none" (click)="sidenav.open()">
+            <fa-icon icon="bars"></fa-icon>
+          </button>
+
+          <span routerLink="" class="branding spacer center d-inline d-sm-none">
+            <img [src]="logo" />
+          </span>
+          <span routerLink="" class="branding spacer center d-none d-sm-inline d-md-none"><img [src]="logo" /> </span>
+          <span routerLink="" class="branding spacer d-none d-md-inline"><img [src]="logo" /> </span>
+
+          <span class="d-none d-md-inline">
+            <button mat-button class="nav-button" *ngFor="let item of navigation" [routerLink]="[item.link]"
+              routerLinkActive="active">
+              {{item.label | translate}}
+            </button>
+          </span>
+
+
+          <button mat-icon-button
+                  *ngIf="appState.isAuthenticated | async"
+                  [matMenuTriggerFor]="toolbarUserMenu"
+                  class="d-none d-sm-inline">
+            <fa-icon icon="cog"></fa-icon>
+          </button>
+          <mat-menu #toolbarUserMenu="matMenu">
+            <button mat-menu-item routerLink="configuration">
+              <mat-icon><fa-icon icon="cogs"></fa-icon></mat-icon>
+              <span>{{ 'minsql.menu.config' | translate }}</span>
+            </button>
+            <button mat-menu-item (click)="onLogoutClick()">
+              <mat-icon><fa-icon icon="power-off"></fa-icon></mat-icon>
+              <span>{{ 'minsql.menu.logout' | translate }}</span>
+            </button>
+          </mat-menu>
+
+        </mat-toolbar>
+      </div>
+
+      <div class="content" [@routeAnimations]="o.isActivated && o.activatedRoute.routeConfig.data && o.activatedRoute.routeConfig.data.title">
+        <div class="content-wrapper">
+          <router-outlet #o="outlet"></router-outlet>
+        </div>
+      </div>
+
+    </div>
+
+  </mat-sidenav-container>
+
+</div>

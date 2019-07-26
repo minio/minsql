@@ -1,0 +1,65 @@
+<!--This file is part of MinSQL-->
+<!--Copyright (c) 2019 MinIO, Inc.-->
+
+<!--This program is free software: you can redistribute it and/or modify-->
+<!--it under the terms of the GNU Affero General Public License as published by-->
+<!--the Free Software Foundation, either version 3 of the License, or-->
+<!--(at your option) any later version.-->
+
+<!--This program is distributed in the hope that it will be useful,-->
+<!--but WITHOUT ANY WARRANTY; without even the implied warranty of-->
+<!--MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the-->
+<!--GNU Affero General Public License for more details.-->
+
+<!--You should have received a copy of the GNU Affero General Public License-->
+<!--along with this program.  If not, see <http://www.gnu.org/licenses/>.-->
+
+<div class="content-wrapper">
+  <h1>Logs</h1>
+  <div>
+    <button mat-icon-button
+            style="float:right;"
+            matTooltip="Refresh"
+            (click)="loadData()">
+      <mat-icon>refresh</mat-icon>
+    </button>
+    <button mat-icon-button
+            style="float:right;"
+            matTooltip="Add"
+            (click)="add()">
+      <mat-icon>add</mat-icon>
+    </button>
+    <div style="clear:both;"></div>
+  </div>
+  <div class="mat-elevation-z2">
+
+    <div class="spinner-container" *ngIf="dataSource.loading$ | async">
+      <mat-spinner></mat-spinner>
+    </div>
+
+    <table mat-table [dataSource]="dataSource">
+
+      <ng-container matColumnDef="name">
+        <th mat-header-cell *matHeaderCellDef> Name </th>
+        <td mat-cell *matCellDef="let element"> {{element.name}} </td>
+      </ng-container>
+
+      <ng-container matColumnDef="commit_window">
+        <th mat-header-cell *matHeaderCellDef> Commit Window </th>
+        <td mat-cell *matCellDef="let element"> {{element.commit_window}} </td>
+      </ng-container>
+
+      <ng-container matColumnDef="datastores">
+        <th mat-header-cell *matHeaderCellDef> Datasources </th>
+        <td mat-cell *matCellDef="let element"> {{element.datastores}} </td>
+      </ng-container>
+
+
+      <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+      <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="clickOn(row)"></tr>
+    </table>
+
+    <mat-paginator [length]="dataSource.totalElements() | async" [pageSizeOptions]="[10, 20]" showFirstLastButtons></mat-paginator>
+  </div>
+
+</div>

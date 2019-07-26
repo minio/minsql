@@ -1,0 +1,17 @@
+{
+  "minsql.config.logs.title" : "Logs",
+  "minsql.config.datastores.title" : "Datastores",
+  "minsql.config.users.title" : "Users",
+  "minsql.config.auth.description1": "This component is only accessible for authenticated users",
+  "minsql.config.auth.description2": "Logging out will cause user to be redirected to home screen if visiting route accessible only to authenticated users",
+  "minsql.config.auth.title": "Authenticated component",
+  "minsql.config.menu.auth": "Auth",
+  "minsql.config.menu.crud": "CRUD",
+  "minsql.config.menu.form": "Form",
+  "minsql.config.menu.notifications": "Notifications",
+  "minsql.config.menu.stocks": "Stocks",
+  "minsql.config.menu.theming": "Theming",
+  "minsql.config.menu.todos": "Todos",
+  "minsql.config.menu.simple-state-management": "Simple State Management",
+  "minsql.config.title": "Examples"
+}

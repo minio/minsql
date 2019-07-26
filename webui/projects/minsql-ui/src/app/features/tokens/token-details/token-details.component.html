@@ -1,0 +1,111 @@
+<!--This file is part of MinSQL-->
+<!--Copyright (c) 2019 MinIO, Inc.-->
+
+<!--This program is free software: you can redistribute it and/or modify-->
+<!--it under the terms of the GNU Affero General Public License as published by-->
+<!--the Free Software Foundation, either version 3 of the License, or-->
+<!--(at your option) any later version.-->
+
+<!--This program is distributed in the hope that it will be useful,-->
+<!--but WITHOUT ANY WARRANTY; without even the implied warranty of-->
+<!--MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the-->
+<!--GNU Affero General Public License for more details.-->
+
+<!--You should have received a copy of the GNU Affero General Public License-->
+<!--along with this program.  If not, see <http://www.gnu.org/licenses/>.-->
+
+<div class="content-wrapper">
+
+  <form class="data-form">
+    <ng-container *ngIf="token != null">
+      <mat-card>
+        <mat-card-content>
+          <button mat-icon-button
+                  *ngIf="addingNew == false"
+                  (click)="delete()"
+                  matTooltip="Delete log"
+                  style="float:right;">
+            <mat-icon>delete</mat-icon>
+          </button>
+          <h1>Access Details</h1>
+
+          <mat-form-field class="field-full-width">
+            <input matInput
+                   placeholder="Access Key"
+                   name="access_key"
+                   [(ngModel)]="token.access_key">
+          </mat-form-field>
+
+          <mat-form-field class="field-full-width">
+            <input matInput
+                   placeholder="Secret Key"
+                   name="secret_key"
+                   [(ngModel)]="token.secret_key">
+          </mat-form-field>
+
+          <mat-form-field class="field-full-width">
+      <textarea matInput
+                placeholder="Description"
+                name="description"
+                [(ngModel)]="token.description"></textarea>
+          </mat-form-field>
+
+          <div class="field-full-width">
+            <mat-checkbox name="enabled" [(ngModel)]="token.enabled">Enabled</mat-checkbox>
+          </div>
+
+          <div class="field-full-width">
+            <mat-checkbox name="is_admin" [(ngModel)]="token.is_admin">Is Admin</mat-checkbox>
+          </div>
+        </mat-card-content>
+      </mat-card>
+
+    </ng-container>
+    <h4>Log access</h4>
+    <div class="mat-elevation-z2">
+
+      <div class="spinner-container" *ngIf="logsDataSource.loading$ | async">
+        <mat-spinner></mat-spinner>
+      </div>
+
+      <table mat-table [dataSource]="logsDataSource">
+
+        <ng-container matColumnDef="name">
+          <th mat-header-cell *matHeaderCellDef> Name</th>
+          <td mat-cell *matCellDef="let element"> {{element.name}} </td>
+        </ng-container>
+
+        <ng-container matColumnDef="search">
+          <th mat-header-cell *matHeaderCellDef> Search</th>
+          <td mat-cell *matCellDef="let element">
+            <mat-checkbox
+              (change)="flippedLogCB(element,'search')"
+              [checked]="isChecked(element,'search')"></mat-checkbox>
+          </td>
+        </ng-container>
+
+        <ng-container matColumnDef="store">
+          <th mat-header-cell *matHeaderCellDef> Store</th>
+          <td mat-cell *matCellDef="let element">
+            <mat-checkbox
+              (change)="flippedLogCB(element,'store')"
+              [checked]="isChecked(element,'store')"></mat-checkbox>
+          </td>
+        </ng-container>
+
+
+        <tr mat-header-row *matHeaderRowDef="logDisplayedColumns"></tr>
+        <tr mat-row *matRowDef="let row; columns: logDisplayedColumns;"></tr>
+      </table>
+
+      <mat-paginator [length]="logsDataSource.totalElements() | async" [pageSizeOptions]="[10, 20]"
+                     showFirstLastButtons></mat-paginator>
+    </div>
+
+
+    <div class="form-actions">
+      <button mat-raised-button color="primary" (click)="save()">Save</button>
+    </div>
+
+  </form>
+</div>

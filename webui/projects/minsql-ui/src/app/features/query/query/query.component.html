@@ -1,0 +1,69 @@
+<!--This file is part of MinSQL-->
+<!--Copyright (c) 2019 MinIO, Inc.-->
+
+<!--This program is free software: you can redistribute it and/or modify-->
+<!--it under the terms of the GNU Affero General Public License as published by-->
+<!--the Free Software Foundation, either version 3 of the License, or-->
+<!--(at your option) any later version.-->
+
+<!--This program is distributed in the hope that it will be useful,-->
+<!--but WITHOUT ANY WARRANTY; without even the implied warranty of-->
+<!--MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the-->
+<!--GNU Affero General Public License for more details.-->
+
+<!--You should have received a copy of the GNU Affero General Public License-->
+<!--along with this program.  If not, see <http://www.gnu.org/licenses/>.-->
+
+<div class="container">
+  <div id="query-builder" class="row">
+    <div class="col-md-12">
+      <form class="query-builder-form" (submit)="submitQuery()">
+        <mat-form-field class="qb-full-width">
+
+          <input matInput
+                 placeholder="Query"
+                 aria-label="Query"
+                 [autofocus]="true"
+                 [matAutocomplete]="auto"
+                 [formControl]="stateCtrl"
+                 #qbfield>
+          <mat-autocomplete #auto="matAutocomplete" (optionSelected)="optionSelected($event)">
+            <mat-option *ngFor="let state of filteredStates | async" [value]="state">
+              <span>{{state.name}}</span>&nbsp;
+              <ng-container *ngIf="state.description">
+                <small>({{state.description}})</small>
+              </ng-container>
+            </mat-option>
+          </mat-autocomplete>
+        </mat-form-field>
+      </form>
+      <mat-tab-group *ngIf="resultingData !== null" class="mat-elevation-z3">
+        <mat-tab label="Preview">
+          <ng-container *ngIf="!(loadingSubject.asObservable() | async)">
+            <ng-container *ngIf="resultingData !== null">
+              <div class="results-container mat-elevation-z8">
+                <table mat-table [dataSource]="resultingData"  style="width: 100%">
+                  <ng-container *ngFor="let col of displayedColumns" [matColumnDef]="col">
+                    <th mat-header-cell *matHeaderCellDef> {{col}} </th>
+                    <td mat-cell *matCellDef="let element"> {{element[col]}} </td>
+                  </ng-container>
+                  <tr mat-header-row *matHeaderRowDef="displayedColumns; sticky: true"></tr>
+                  <tr mat-row *matRowDef="let row; columns: displayedColumns;"></tr>
+                </table>
+              </div>
+            </ng-container>
+          </ng-container>
+          <div class="spinner-container" *ngIf="loadingSubject.asObservable() | async">
+            <mat-spinner></mat-spinner>
+            <button mat-raised-button (click)="cancelRequest()">Cancel Request</button>
+          </div>
+        </mat-tab>
+        <mat-tab label="Generate Code" (click)="flipper = !flipper">
+          <ng-template matTabContent>
+            <minsql-codegen [query]="outputQuery" [ready]="flipper"></minsql-codegen>
+          </ng-template>
+        </mat-tab>
+      </mat-tab-group>
+    </div>
+  </div>
+</div>

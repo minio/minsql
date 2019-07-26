@@ -1,0 +1,57 @@
+// This file is part of MinSQL
+// Copyright (c) 2019 MinIO, Inc.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+$mat-minio: (
+  50: #e0f7fa,
+  100: #b2ebf2,
+  200: #a1d6dd,
+  300: #8cbbc2,
+  400: #2083c1,
+  500: #1f7fba,
+  600: #478ea8,
+  700: #427089,
+  800: #00303f,
+  900: #003344,
+  A100: #84ffff,
+  A200: #18ffff,
+  A400: #00e5ff,
+  A700: #00b8d4,
+  contrast: (
+    50: $dark-primary-text,
+    100: $dark-primary-text,
+    200: $dark-primary-text,
+    300: $dark-primary-text,
+    400: $dark-primary-text,
+    500: $light-primary-text,
+    600: $light-primary-text,
+    700: $light-primary-text,
+    800: $light-primary-text,
+    900: $light-primary-text,
+    A100: $dark-primary-text,
+    A200: $dark-primary-text,
+    A400: $dark-primary-text,
+    A700: $dark-primary-text,
+  )
+);
+
+
+$minio-primary: mat-palette($mat-minio, 800, 300, 900);
+$minio-accent: mat-palette($mat-minio);
+$minio-warn: mat-palette($mat-pink, 600);
+$white: #FFFFFF;
+
+
+$minio-theme: mat-light-theme($minio-primary, $minio-accent, $minio-warn);
