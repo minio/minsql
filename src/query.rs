@@ -26,6 +26,7 @@ use futures::{stream, Future, Stream};
 use hyper::{Body, Chunk, Request, Response};
 use log::{error, info};
 use regex::Regex;
+use serde_json::json;
 use sqlparser::ast::{BinaryOperator, Expr, SelectItem, SetExpr, Statement, Value};
 use sqlparser::parser::Parser;
 use sqlparser::parser::ParserError;
@@ -33,16 +34,13 @@ use tokio::sync::mpsc;
 
 use bitflags::bitflags;
 use lazy_static::lazy_static;
-use serde_json::json;
 
 use crate::auth::Auth;
 use crate::combinators::take_from_iterable::TakeFromIterable;
 use crate::config::Config;
-use crate::constants::SF_DATE;
-use crate::constants::SF_EMAIL;
-use crate::constants::SF_IP;
-use crate::constants::SF_QUOTED;
-use crate::constants::SF_URL;
+use crate::constants::{
+    SF_DATE, SF_EMAIL, SF_IP, SF_PHONE, SF_QUOTED, SF_URL, SF_USER_AGENT, SMART_FIELDS_RAW_RE,
+};
 use crate::dialect::MinSQLDialect;
 use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
@@ -55,13 +53,27 @@ bitflags! {
     // If you are adding new values make sure to add the next power of 2 as
     // they are evaluated using a bitwise operation
     pub struct ScanFlags: u32 {
-        const IP = 1;
-        const EMAIL = 2;
-        const DATE = 4;
-        const QUOTED = 8;
-        const URL = 16;
-        const NONE = 32;
+        const NONE = 1;
+        const IP = 2;
+        const EMAIL = 4;
+        const DATE = 8;
+        const QUOTED = 16;
+        const URL = 32;
+        const PHONE = 64;
+        const USER_AGENT = 128;
     }
+}
+
+lazy_static! {
+    static ref IP_RE :Regex= Regex::new(r"(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))").unwrap();
+    static ref EMAIL_RE :Regex= Regex::new(r"([\w\.!#$%&'*+\-=?\^_`{|}~]+@([\w\d-]+\.)+[\w]{2,4})").unwrap();
+    // TODO: This regex matches a fairly simple date format, improve : 2019-05-23
+    static ref DATE_RE :Regex= Regex::new(r"((19[789]\d|2\d{3})[-/](0[1-9]|1[1-2])[-/](0[1-9]|[1-2][0-9]|3[0-1]*))|((0[1-9]|[1-2][0-9]|3[0-1]*)[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|(0[1-9]|1[1-2]))[-/](19[789]\d|2\d{3}))").unwrap();
+    static ref QUOTED_RE :Regex= Regex::new("((\"(.*?)\")|'(.*?)')").unwrap();
+    static ref URL_RE :Regex= Regex::new(r#"(https?|ftp)://[^\s/$.?#].[^()\]\[\s]*"#).unwrap();
+    static ref PHONE_RE :Regex= Regex::new(r#"[\(]?(\d{3})[\)-]?[- ]?(\d{3})[- ]?(\d{4})"#).unwrap();
+    static ref USER_AGENT_RE :Regex= Regex::new(r#""((Mozilla|Links).*? \(.*?\)( .*?[0-9]{1,3}\.[0-9]{1,3}\.?[0-9]{0,3})?)""#).unwrap();
+    static ref SMART_FIELDS_RE: Regex = Regex::new(SMART_FIELDS_RAW_RE).unwrap();
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -78,6 +90,8 @@ struct SmartColumn {
     position: i32,
     // if this column was aliased
     alias: String,
+    // if the smart field has subfields `$ip.country`
+    subfield: Option<String>,
 }
 
 #[derive(Debug)]
@@ -157,7 +171,13 @@ impl Query {
             let some_table = match query {
                 Statement::Query(q) => match q.body {
                     // TODO: Validate a single table
-                    SetExpr::Select(ref bodyselect) => Some(bodyselect.from[0].relation.clone()),
+                    SetExpr::Select(ref bodyselect) => {
+                        if bodyselect.from.len() == 0 {
+                            None
+                        } else {
+                            Some(bodyselect.from[0].relation.clone())
+                        }
+                    }
                     _ => None,
                 },
                 _ => {
@@ -332,10 +352,6 @@ impl Query {
         access_token: &String,
         query: Statement,
     ) -> Result<(Statement, QueryParsing), ProcessingQueryError> {
-        lazy_static! {
-            static ref SMART_FIELDS_RE: Regex =
-                Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
-        };
         // find the table they want to query
         let some_table = match query {
             Statement::Query(ref q) => {
@@ -406,49 +422,22 @@ impl Query {
         let mut smart_fields: Vec<SmartColumn> = Vec::new();
         let mut smart_fields_set: HashSet<String> = HashSet::new();
         let mut projections_ordered: Vec<String> = Vec::new();
-        // TODO: We should stream the data out as it becomes available to save memory
         for proj in &projections {
             match proj {
                 SelectItem::UnnamedExpr(ref ast) => {
                     // we have an identifier
-                    match ast {
-                        Expr::Identifier(ref identifier) => {
-                            let id_name = &identifier[1..];
-                            let position = match id_name.parse::<i32>() {
-                                Ok(p) => p,
-                                Err(_) => -1,
-                            };
-                            // if we were able to parse identifier as an i32 it's a positional
-                            if position > 0 {
-                                positional_fields.push(PositionalColumn {
-                                    position: position,
-                                    alias: identifier.clone(),
-                                });
-                                projections_ordered.push(identifier.clone());
-                            } else {
-                                // try to parse as as smart field
-                                for sfield in SMART_FIELDS_RE.captures_iter(identifier) {
-                                    let typed = sfield[2].to_string();
-                                    let mut pos = 1;
-                                    if sfield.get(4).is_none() == false {
-                                        pos = match sfield[4].parse::<i32>() {
-                                            Ok(p) => p,
-                                            // technically this should never happen as the regex already validated an integer
-                                            Err(_) => -1,
-                                        };
-                                    }
-                                    // we use this set to keep track of active smart fields
-                                    smart_fields_set.insert(typed.clone());
-                                    // track the smartfield
-                                    smart_fields.push(SmartColumn {
-                                        typed: typed.clone(),
-                                        position: pos,
-                                        alias: identifier.clone(),
-                                    });
-                                    // record the order or extraction
-                                    projections_ordered.push(identifier.clone());
-                                }
-                            }
+                    match detect_field_for_ast(ast) {
+                        FieldFound::PositionalField(positional) => {
+                            projections_ordered.push(positional.alias.clone());
+                            positional_fields.push(positional);
+                        }
+                        FieldFound::SmartField(smart) => {
+                            // we use this set to keep track of active smart fields
+                            smart_fields_set.insert(smart.typed.clone());
+                            // record the order or extraction
+                            projections_ordered.push(smart.alias.clone());
+                            // track the smartfield
+                            smart_fields.push(smart);
                         }
                         _ => (),
                     }
@@ -496,6 +485,8 @@ impl Query {
                 "$date" => ScanFlags::DATE,
                 "$quoted" => ScanFlags::QUOTED,
                 "$url" => ScanFlags::URL,
+                "$phone" => ScanFlags::PHONE,
+                "$user_agent" => ScanFlags::USER_AGENT,
                 _ => ScanFlags::NONE,
             };
             if scan_flags == ScanFlags::NONE {
@@ -588,10 +579,6 @@ fn process_fields_for_ast(
     smart_fields: &mut Vec<SmartColumn>,
     smart_fields_set: &mut HashSet<String>,
 ) {
-    lazy_static! {
-        static ref SMART_FIELDS_RE: Regex =
-            Regex::new(r"((\$(ip|email|date|url|quoted))([0-9]+)*)\b").unwrap();
-    };
     match ast_node {
         Expr::Nested(nested_ast) => {
             process_fields_for_ast(
@@ -602,89 +589,31 @@ fn process_fields_for_ast(
             );
         }
         Expr::IsNotNull(ast) => {
-            let identifier = match **ast {
-                Expr::Identifier(ref identifier) => identifier.to_string(),
-                _ => {
-                    // TODO: Should we be retunring anything at all?
-                    "".to_string()
+            match detect_field_for_ast(&**ast) {
+                FieldFound::PositionalField(positional) => {
+                    positional_fields.push(positional);
                 }
-            };
-            //positional or smart?
-            let id_name = &identifier[1..];
-            let position = match id_name.parse::<i32>() {
-                Ok(p) => p,
-                Err(_) => -1,
-            };
-            // if we were able to parse identifier as an i32 it's a positional
-            if position > 0 {
-                positional_fields.push(PositionalColumn {
-                    position: position,
-                    alias: identifier.clone(),
-                });
-            } else {
-                // try to parse as as smart field
-                for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
-                    let typed = sfield[2].to_string();
-                    let mut pos = 1;
-                    if sfield.get(4).is_none() == false {
-                        pos = match sfield[4].parse::<i32>() {
-                            Ok(p) => p,
-                            // technically this should never happen as the regex already validated an integer
-                            Err(_) => -1,
-                        };
-                    }
+                FieldFound::SmartField(smart) => {
                     // we use this set to keep track of active smart fields
-                    smart_fields_set.insert(typed.clone());
+                    smart_fields_set.insert(smart.typed.clone());
                     // track the smartfield
-                    smart_fields.push(SmartColumn {
-                        typed: typed.clone(),
-                        position: pos,
-                        alias: identifier.clone(),
-                    });
+                    smart_fields.push(smart);
                 }
+                _ => (),
             }
         }
         Expr::IsNull(ast) => {
-            let identifier = match **ast {
-                Expr::Identifier(ref identifier) => identifier.to_string(),
-                _ => {
-                    // TODO: Should we be retunring anything at all?
-                    "".to_string()
+            match detect_field_for_ast(&**ast) {
+                FieldFound::PositionalField(positional) => {
+                    positional_fields.push(positional);
                 }
-            };
-            //positional or smart?
-            let id_name = &identifier[1..];
-            let position = match id_name.parse::<i32>() {
-                Ok(p) => p,
-                Err(_) => -1,
-            };
-            // if we were able to parse identifier as an i32 it's a positional
-            if position > 0 {
-                positional_fields.push(PositionalColumn {
-                    position: position,
-                    alias: identifier.clone(),
-                });
-            } else {
-                // try to parse as as smart field
-                for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
-                    let typed = sfield[2].to_string();
-                    let mut pos = 1;
-                    if sfield.get(4).is_none() == false {
-                        pos = match sfield[4].parse::<i32>() {
-                            Ok(p) => p,
-                            // technically this should never happen as the regex already validated an integer
-                            Err(_) => -1,
-                        };
-                    }
+                FieldFound::SmartField(smart) => {
                     // we use this set to keep track of active smart fields
-                    smart_fields_set.insert(typed.clone());
+                    smart_fields_set.insert(smart.typed.clone());
                     // track the smartfield
-                    smart_fields.push(SmartColumn {
-                        typed: typed.clone(),
-                        position: pos,
-                        alias: identifier.clone(),
-                    });
+                    smart_fields.push(smart);
                 }
+                _ => (),
             }
         }
         Expr::BinaryOp { left, op, right } => {
@@ -708,41 +637,17 @@ fn process_fields_for_ast(
                     );
                 }
                 _ => {
-                    let identifier = left.to_string();
-
-                    //positional or smart?
-                    let id_name = &identifier[1..];
-                    let position = match id_name.parse::<i32>() {
-                        Ok(p) => p,
-                        Err(_) => -1,
-                    };
-                    // if we were able to parse identifier as an i32 it's a positional
-                    if position > 0 {
-                        positional_fields.push(PositionalColumn {
-                            position: position,
-                            alias: identifier.clone(),
-                        });
-                    } else {
-                        // try to parse as as smart field
-                        for sfield in SMART_FIELDS_RE.captures_iter(&identifier[..]) {
-                            let typed = sfield[2].to_string();
-                            let mut pos = 1;
-                            if sfield.get(4).is_none() == false {
-                                pos = match sfield[4].parse::<i32>() {
-                                    Ok(p) => p,
-                                    // technically this should never happen as the regex already validated an integer
-                                    Err(_) => -1,
-                                };
-                            }
-                            // we use this set to keep track of active smart fields
-                            smart_fields_set.insert(typed.clone());
-                            // track the smartfield
-                            smart_fields.push(SmartColumn {
-                                typed: typed.clone(),
-                                position: pos,
-                                alias: identifier.clone(),
-                            });
+                    match detect_field_for_ast(&**left) {
+                        FieldFound::PositionalField(positional) => {
+                            positional_fields.push(positional);
                         }
+                        FieldFound::SmartField(smart) => {
+                            // we use this set to keep track of active smart fields
+                            smart_fields_set.insert(smart.typed.clone());
+                            // track the smartfield
+                            smart_fields.push(smart);
+                        }
+                        _ => (),
                     }
                 }
             }
@@ -754,15 +659,6 @@ fn process_fields_for_ast(
 }
 
 pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> {
-    // Compile the regex only once
-    lazy_static! {
-        static ref IP_RE :Regex= Regex::new(r"(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))").unwrap();
-        static ref EMAIL_RE :Regex= Regex::new(r"([\w\.!#$%&'*+\-=?\^_`{|}~]+@([\w\d-]+\.)+[\w]{2,4})").unwrap();
-        // TODO: This regex matches a fairly simple date format, improve : 2019-05-23
-        static ref DATE_RE :Regex= Regex::new(r"((19[789]\d|2\d{3})[-/](0[1-9]|1[1-2])[-/](0[1-9]|[1-2][0-9]|3[0-1]*))|((0[1-9]|[1-2][0-9]|3[0-1]*)[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|(0[1-9]|1[1-2]))[-/](19[789]\d|2\d{3}))").unwrap();
-        static ref QUOTED_RE :Regex= Regex::new("((\"(.*?)\")|'(.*?)')").unwrap();
-        static ref URL_RE :Regex= Regex::new(r#"(https?|ftp)://[^\s/$.?#].[^()\]\[\s]*"#).unwrap();
-    }
     let mut results: HashMap<String, Vec<String>> = HashMap::new();
 
     if flags.contains(ScanFlags::IP) {
@@ -805,6 +701,20 @@ pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> 
         }
         results.insert(SF_URL.to_string(), items);
     }
+    if flags.contains(ScanFlags::PHONE) {
+        let mut items: Vec<String> = Vec::new();
+        for cap in PHONE_RE.captures_iter(text) {
+            items.push(cap[0].to_string())
+        }
+        results.insert(SF_PHONE.to_string(), items);
+    }
+    if flags.contains(ScanFlags::USER_AGENT) {
+        let mut items: Vec<String> = Vec::new();
+        for cap in USER_AGENT_RE.captures_iter(text) {
+            items.push(cap[1].to_string())
+        }
+        results.insert(SF_USER_AGENT.to_string(), items);
+    }
     results
 }
 
@@ -839,10 +749,100 @@ pub fn extract_smart_fields(
                 // if the requested position is available
                 let key = smt.alias.clone();
                 if smt.position - 1 < (found_vals[&smt.typed].len() as i32) {
-                    projection_values.insert(
-                        key,
-                        Some(found_vals[&smt.typed][(smt.position - 1) as usize].clone()),
-                    );
+                    let value = found_vals[&smt.typed][(smt.position - 1) as usize].clone();
+                    // match on subfield usage and validity of the subfield
+                    match (
+                        &smt.typed[..],
+                        &smt.subfield.as_ref().map_or(None, |m| Some(m.as_str())),
+                    ) {
+                        (SF_USER_AGENT, Some("name")) => {
+                            // TODO: Cache this parsing
+                            let parser = woothee::parser::Parser::new();
+                            match parser.parse(&value[..]) {
+                                Some(r) => {
+                                    projection_values.insert(key, Some(r.name.to_string()));
+                                }
+                                None => {
+                                    projection_values.insert(key, None);
+                                }
+                            }
+                        }
+                        (SF_USER_AGENT, Some("category")) => {
+                            // TODO: Cache this parsing
+                            let parser = woothee::parser::Parser::new();
+                            match parser.parse(&value[..]) {
+                                Some(r) => {
+                                    projection_values.insert(key, Some(r.category.to_string()));
+                                }
+                                None => {
+                                    projection_values.insert(key, None);
+                                }
+                            }
+                        }
+                        (SF_USER_AGENT, Some("browser_type")) => {
+                            // TODO: Cache this parsing
+                            let parser = woothee::parser::Parser::new();
+                            match parser.parse(&value[..]) {
+                                Some(r) => {
+                                    projection_values.insert(key, Some(r.browser_type.to_string()));
+                                }
+                                None => {
+                                    projection_values.insert(key, None);
+                                }
+                            }
+                        }
+                        (SF_USER_AGENT, Some("os")) => {
+                            // TODO: Cache this parsing
+                            let parser = woothee::parser::Parser::new();
+                            match parser.parse(&value[..]) {
+                                Some(r) => {
+                                    projection_values.insert(key, Some(r.os.to_string()));
+                                }
+                                None => {
+                                    projection_values.insert(key, None);
+                                }
+                            }
+                        }
+                        (SF_USER_AGENT, Some("os_version")) => {
+                            // TODO: Cache this parsing
+                            let parser = woothee::parser::Parser::new();
+                            match parser.parse(&value[..]) {
+                                Some(r) => {
+                                    projection_values.insert(key, Some(r.os_version.to_string()));
+                                }
+                                None => {
+                                    projection_values.insert(key, None);
+                                }
+                            }
+                        }
+                        (SF_USER_AGENT, Some("version")) => {
+                            // TODO: Cache this parsing
+                            let parser = woothee::parser::Parser::new();
+                            match parser.parse(&value[..]) {
+                                Some(r) => {
+                                    projection_values.insert(key, Some(r.version.to_string()));
+                                }
+                                None => {
+                                    projection_values.insert(key, None);
+                                }
+                            }
+                        }
+                        (SF_USER_AGENT, Some("vendor")) => {
+                            // TODO: Cache this parsing
+                            let parser = woothee::parser::Parser::new();
+                            match parser.parse(&value[..]) {
+                                Some(r) => {
+                                    projection_values.insert(key, Some(r.vendor.to_string()));
+                                }
+                                None => {
+                                    projection_values.insert(key, None);
+                                }
+                            }
+                        }
+                        (_, _) => {
+                            projection_values.insert(key, Some(value));
+                        }
+                    }
                 } else {
                     projection_values.insert(key, None);
                 }
@@ -960,6 +960,71 @@ impl StateHolder {
     fn new() -> StateHolder {
         StateHolder {
             query_parsing: Vec::new(),
+        }
+    }
+}
+
+enum FieldFound {
+    SmartField(SmartColumn),
+    PositionalField(PositionalColumn),
+    Unknown,
+}
+
+fn detect_field_for_ast(ast: &Expr) -> FieldFound {
+    match ast {
+        Expr::Identifier(ref identifier) => {
+            let id_name = &identifier[1..];
+            let position = id_name.parse::<i32>().unwrap_or(-1);
+            // if we were able to parse identifier as an i32 it's a positional
+            if position > 0 {
+                FieldFound::PositionalField(PositionalColumn {
+                    position: position,
+                    alias: identifier.clone(),
+                })
+            } else {
+                // try to parse as as smart field
+                if let Some(smart_field_match) = SMART_FIELDS_RE.captures(identifier) {
+                    let typed = smart_field_match[2].to_string();
+                    // Default the position to 1 unless there's a matching group for position
+                    let pos = smart_field_match
+                        .get(4)
+                        .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
+                    // build
+                    return FieldFound::SmartField(SmartColumn {
+                        typed: typed.clone(),
+                        position: pos,
+                        alias: identifier.clone(),
+                        subfield: None,
+                    });
+                } else {
+                    FieldFound::Unknown
+                }
+            }
+        }
+        Expr::CompoundIdentifier(ref identifier) => {
+            // try to parse as as smart field
+            if let Some(smart_field_match) = SMART_FIELDS_RE.captures(&identifier[0][..]) {
+                let typed = smart_field_match[2].to_string();
+                // Default the position to 1 unless there's a matching group for position
+                let pos = smart_field_match
+                    .get(4)
+                    .map_or(1, |m| m.as_str().parse::<i32>().unwrap_or(1));
+                // get subfield
+                let subfield = Some(identifier[1..].join("."));
+                // build
+                return FieldFound::SmartField(SmartColumn {
+                    typed: typed.clone(),
+                    position: pos,
+                    alias: identifier.join(".").clone(),
+                    subfield: subfield,
+                });
+            } else {
+                FieldFound::Unknown
+            }
+        }
+        x => {
+            info!("Use un unhandled ast {:?}", &x);
+            FieldFound::Unknown
         }
     }
 }
@@ -1177,11 +1242,13 @@ mod query_tests {
                             typed: "$ip".to_string(),
                             position: 1,
                             alias: "$ip".to_string(),
+                            subfield: None,
                         },
                         SmartColumn {
                             typed: "$email".to_string(),
                             position: 1,
                             alias: "$email".to_string(),
+                            subfield: None,
                         }
                     ]
                 );
@@ -1227,11 +1294,13 @@ mod query_tests {
                             typed: "$ip".to_string(),
                             position: 1,
                             alias: "$ip".to_string(),
+                            subfield: None,
                         },
                         SmartColumn {
                             typed: "$email".to_string(),
                             position: 1,
                             alias: "$email".to_string(),
+                            subfield: None,
                         }
                     ]
                 );
@@ -1337,5 +1406,103 @@ mod query_tests {
             None => panic!("Should have reported an error"),
             Some(_) => assert!(true),
         }
+    }
+
+    struct ParseMatchTestCase {
+        log_name: String,
+        query: String,
+        log_line: String,
+        expected: HashMap<String, String>,
+    }
+
+    fn run_parse_and_match_case(tc: ParseMatchTestCase) {
+        let access_token = VALID_TOKEN.to_string();
+
+        let cfg = get_ds_log_auth_config_for(tc.log_name, &access_token);
+        let cfg = Arc::new(RwLock::new(cfg));
+        let query_c = Query::new(cfg);
+
+        let query = tc.query;
+        let ast = query_c.parse_query(query.clone()).unwrap();
+
+        let queries_parse = query_c.process_sql(&access_token, ast).unwrap();
+
+        let log_line = tc.log_line;
+
+        let (the_query, query_data) = match queries_parse.get(0).unwrap() {
+            (x, y) => (x, y),
+        };
+
+        let res = evaluate_query_on_line(&the_query, query_data, log_line);
+
+        let payload = res.unwrap();
+        let res_json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+
+        for (key, value) in tc.expected {
+            if let Some(serde_json::Value::String(res_value)) = res_json.get(key) {
+                assert_eq!(res_value, &value);
+            } else {
+                assert!(false)
+            }
+        }
+    }
+
+    macro_rules! map (
+    { $($key:expr => $value:expr),+ } => {
+        {
+            let mut m = ::std::collections::HashMap::new();
+            $(
+                m.insert($key, $value);
+            )+
+            m
+        }
+     };
+    );
+
+    #[test]
+    fn sf_phone_parse_and_match() {
+        let tc = ParseMatchTestCase {
+            log_name: "mylog".to_string(),
+            query: "SELECT $phone FROM mylog".to_string(),
+            log_line: "xx (555) 555-5555 xx".to_string(),
+            expected: map! {"$phone".to_string() =>"(555) 555-5555".to_string()},
+        };
+        run_parse_and_match_case(tc);
+    }
+
+    #[test]
+    fn sf_email_parse_and_match() {
+        let tc = ParseMatchTestCase {
+            log_name: "mylog".to_string(),
+            query: "SELECT $email FROM mylog".to_string(),
+            log_line: "xx valid@emaildomain.com xx".to_string(),
+            expected: map! {"$email".to_string() =>"valid@emaildomain.com".to_string()},
+        };
+        run_parse_and_match_case(tc);
+    }
+
+    #[test]
+    fn sf_user_agent_parse_and_match() {
+        let tc = ParseMatchTestCase {
+            log_name: "mylog".to_string(),
+            query: "SELECT $user_agent FROM mylog".to_string(),
+            log_line: "xx \"Mozilla/5.0 (Windows NT 10.0; Win64; x64)AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.181 Safari/537.36\" xx".to_string(),
+            expected: map! {"$user_agent".to_string() =>"Mozilla/5.0 (Windows NT 10.0; Win64; x64)AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.181 Safari/537.36".to_string()},
+        };
+        run_parse_and_match_case(tc);
+    }
+
+    #[test]
+    fn scanlog_phone() {
+        let scanflags = ScanFlags::PHONE;
+        let log_line = "xx (555) 555-5555 xx".to_string();
+
+        let mut results = scanlog(&log_line, scanflags);
+
+        assert!(results.contains_key(SF_PHONE));
+        assert_eq!(
+            results.remove(SF_PHONE).unwrap(),
+            vec!["(555) 555-5555".to_string()]
+        );
     }
 }

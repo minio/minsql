@@ -227,10 +227,10 @@ pub fn evaluate(
 
 /// Extracts an `Expr` identifier as a `String`
 pub fn get_identifier_from_ast(ast: &Expr) -> Option<String> {
-    if let Expr::Identifier(ref id) = ast {
-        Some(id.to_string())
-    } else {
-        None
+    match ast {
+        Expr::Identifier(ref id) => Some(id.to_string()),
+        Expr::CompoundIdentifier(ref id) => Some(id.join(".")),
+        _ => None,
     }
 }
 
@@ -326,6 +326,13 @@ mod filter_tests {
         let ast_node = Expr::Identifier("test_id".to_owned());
         let identifier = get_identifier_from_ast(&ast_node);
         assert_eq!(identifier, Some("test_id".to_string()));
+    }
+
+    #[test]
+    fn get_identifier_from_ast_node_compount() {
+        let ast_node = Expr::CompoundIdentifier(vec!["test_id".to_owned(), "subfield".to_owned()]);
+        let identifier = get_identifier_from_ast(&ast_node);
+        assert_eq!(identifier, Some("test_id.subfield".to_string()));
     }
 
     #[test]

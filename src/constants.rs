@@ -23,3 +23,8 @@ pub const SF_EMAIL: &str = "$email";
 pub const SF_DATE: &str = "$date";
 pub const SF_QUOTED: &str = "$quoted";
 pub const SF_URL: &str = "$url";
+pub const SF_PHONE: &str = "$phone";
+pub const SF_USER_AGENT: &str = "$user_agent";
+
+pub const SMART_FIELDS_RAW_RE: &str =
+    r"((\$(ip|email|date|url|quoted|phone|user_agent))([0-9]+)*)\b";
