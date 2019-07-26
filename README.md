@@ -273,3 +273,14 @@ A list of supported entities by MinSQL :
 * *$email*: Any email@address.com
 * *$quoted*: any text that is within single quotes (') or double quotes (")
 * *$url*: any url starting with http
+* *$phone*: any valid 10 digit phone.
+* *$user_agent*: A quoted user agent found in the logs
+  * *$user_agent.name*: Browser name
+  * *$user_agent.category*: type of machine (pc, mac)
+  * *$user_agent.os*: Operative System name
+  * *$user_agent.os_version*: Operative System version
+  * *$user_agent.browser_type*: Type of browser
+  * *$user_agent.version*: version of browser
+  * *$user_agent.vendor*: browser vendor
+
+
