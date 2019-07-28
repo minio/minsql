@@ -206,7 +206,7 @@ impl Meta {
 
         let cfg = Arc::clone(&self.config);
         let task = c
-            .listen_bucket_notificaion(
+            .listen_bucket_notification(
                 &metadata_bucket,
                 None,
                 None,

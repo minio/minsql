@@ -1,0 +1,64 @@
+<div class="content-wrapper">
+  <h1>Users</h1>
+  <div>
+    <button mat-icon-button
+            style="float:right;"
+            matTooltip="Refresh"
+            (click)="loadData()">
+      <mat-icon>refresh</mat-icon>
+    </button>
+    <button mat-icon-button
+            style="float:right;"
+            matTooltip="Add"
+            (click)="add()">
+      <mat-icon>add</mat-icon>
+    </button>
+    <div style="clear:both;"></div>
+  </div>
+  <div class="mat-elevation-z2">
+
+    <div class="spinner-container" *ngIf="dataSource.loading$ | async">
+      <mat-spinner></mat-spinner>
+    </div>
+
+    <table mat-table [dataSource]="dataSource">
+
+      <ng-container matColumnDef="access_key">
+        <th mat-header-cell *matHeaderCellDef> Access Key</th>
+        <td mat-cell *matCellDef="let element"> {{element.access_key}} </td>
+      </ng-container>
+
+      <ng-container matColumnDef="description">
+        <th mat-header-cell *matHeaderCellDef> Description</th>
+        <td mat-cell *matCellDef="let element">
+        <ng-container *ngIf="element.description != null">
+          {{element.description.substr(0,100)}}
+        </ng-container>
+        </td>
+      </ng-container>
+
+      <ng-container matColumnDef="is_admin">
+        <th mat-header-cell *matHeaderCellDef> Is Admin</th>
+        <td mat-cell *matCellDef="let element">
+        <mat-checkbox [checked]="element.is_admin"></mat-checkbox>
+        </td>
+      </ng-container>
+
+
+      <ng-container matColumnDef="enabled">
+        <th mat-header-cell *matHeaderCellDef> Enabled</th>
+        <td mat-cell *matCellDef="let element">
+          <mat-checkbox [checked]="element.enabled"></mat-checkbox>
+        </td>
+      </ng-container>
+
+
+      <tr mat-header-row *matHeaderRowDef="displayedColumns"></tr>
+      <tr mat-row *matRowDef="let row; columns: displayedColumns;" (click)="clickOn(row)"></tr>
+    </table>
+
+    <mat-paginator [length]="dataSource.totalElements() | async" [pageSizeOptions]="[10, 20]"
+                   showFirstLastButtons></mat-paginator>
+  </div>
+
+</div>

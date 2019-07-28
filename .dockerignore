@@ -1,0 +1,6 @@
+# Ignore node_modules, the builder will install them
+webui/node_modules/
+webui/dist/
+
+# ignore local target
+target/

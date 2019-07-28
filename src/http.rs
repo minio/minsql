@@ -15,18 +15,21 @@
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
 use futures::{future, Future};
 use hyper::{Body, Method, Request, Response, StatusCode};
 use log::info;
+use serde_derive::Serialize;
 
 use crate::api::Api;
 use crate::auth::Auth;
 use crate::config::Config;
+use crate::constants::{APP_JAVASCRIPT, APP_JSON, IMAGE_JPEG, TEXT_HTML, UNKNOWN_CONTENT_TYPE};
 use crate::ingest::{Ingest, IngestBuffer};
 use crate::query::Query;
-use serde_derive::Serialize;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type ResponseFuture = Box<Future<Item = Response<Body>, Error = GenericError> + Send>;
@@ -57,6 +60,7 @@ impl Http {
 
         match (req.method(), req.uri().path(), parts.get(0)) {
             // delegate anything starting with /api/ to the api router
+            (_, _, Some(&"ui")) => serve_static_content(req),
             (_, _, Some(&"api")) => {
                 let api = Api::new(Arc::clone(&self.config));
                 api.router(req, parts)
@@ -213,6 +217,71 @@ pub enum HeaderToken {
     NoToken,
     InvalidToken,
     Token(String),
+}
+
+/// Serves content from the `static` folder
+fn serve_static_content(req: Request<Body>) -> ResponseFuture {
+    let mut full_path = "static".to_owned() + &req.uri().path().clone();
+
+    let mut content_type = match Path::new(req.uri().path())
+        .extension()
+        .and_then(OsStr::to_str)
+    {
+        Some(ext) => match ext {
+            "html" => TEXT_HTML,
+            "css" => "text/css",
+            "js" => APP_JAVASCRIPT,
+            "jsonp" => APP_JAVASCRIPT,
+            "json" => APP_JSON,
+            "jpeg" => IMAGE_JPEG,
+            "jpe" => IMAGE_JPEG,
+            "jpg" => IMAGE_JPEG,
+            "png" => "image/png",
+            "gif" => "image/gif",
+            "svg" => "image/svg+xml",
+            _ => UNKNOWN_CONTENT_TYPE,
+        },
+        None => UNKNOWN_CONTENT_TYPE,
+    };
+
+    // if they are accessing anything starting with /ui/*/ without extension and not `/ui/assets/`
+    // reroute to index.html
+    let request_path_no_slash = String::from(&req.uri().path()[1..]);
+    let parts: Vec<&str> = request_path_no_slash.split("/").collect();
+
+    // append index.html to path. if the path ends up with `ui/`
+    if (full_path[full_path.len() - 3..] == *"ui/")
+        || (parts.len() >= 2 && parts[1] != "assets" && parts[1].contains(".") == false)
+    {
+        full_path = "static/ui/index.html".to_string();
+        content_type = TEXT_HTML;
+    }
+
+    Box::new(
+        tokio::fs::file::File::open(full_path)
+            .and_then(move |file| {
+                let buf: Vec<u8> = Vec::new();
+                tokio_io::io::read_to_end(file, buf)
+                    .and_then(move |item| {
+                        Ok(Response::builder()
+                            .header("Content-Type", content_type)
+                            .body(item.1.into())
+                            .unwrap())
+                    })
+                    .or_else(|_| {
+                        Ok(Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::empty())
+                            .unwrap())
+                    })
+            })
+            .or_else(|_| {
+                Ok(Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body("Not Found".into())
+                    .unwrap())
+            }),
+    )
 }
 
 #[cfg(test)]

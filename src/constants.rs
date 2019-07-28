@@ -28,3 +28,10 @@ pub const SF_USER_AGENT: &str = "$user_agent";
 
 pub const SMART_FIELDS_RAW_RE: &str =
     r"((\$(ip|email|date|url|quoted|phone|user_agent))([0-9]+)*)\b";
+
+// MIME Types
+pub const UNKNOWN_CONTENT_TYPE: &str = "text/plain";
+pub const IMAGE_JPEG: &str = "image/jpeg";
+pub const APP_JAVASCRIPT: &str = "application/javascript";
+pub const APP_JSON: &str = "application/json";
+pub const TEXT_HTML: &str = "text/html";

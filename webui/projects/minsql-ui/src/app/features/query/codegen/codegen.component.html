@@ -1,0 +1,40 @@
+<!--This file is part of MinSQL-->
+<!--Copyright (c) 2019 MinIO, Inc.-->
+
+<!--This program is free software: you can redistribute it and/or modify-->
+<!--it under the terms of the GNU Affero General Public License as published by-->
+<!--the Free Software Foundation, either version 3 of the License, or-->
+<!--(at your option) any later version.-->
+
+<!--This program is distributed in the hope that it will be useful,-->
+<!--but WITHOUT ANY WARRANTY; without even the implied warranty of-->
+<!--MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the-->
+<!--GNU Affero General Public License for more details.-->
+
+<!--You should have received a copy of the GNU Affero General Public License-->
+<!--along with this program.  If not, see <http://www.gnu.org/licenses/>.-->
+
+<div class="code-wrapper">
+  <p>You can consume this query on any language via http request, here we generate some examples.</p>
+  <mat-form-field>
+    <mat-label>Filter Language</mat-label>
+    <mat-select (valueChange)="selectChange($event)" name="filter" [(ngModel)]="selectedLang">
+      <mat-option>None</mat-option>
+      <mat-option *ngFor="let elem of codeTemplates" [value]="elem.lang">
+        {{elem.title}}
+      </mat-option>
+    </mat-select>
+  </mat-form-field>
+  <mat-tab-group (animationDone)="ngForRendred()">
+    <mat-tab #allTheseThings *ngFor="let elem of filteredValues" [label]="elem.title">
+      <h4>{{elem.title}}
+        <button mat-icon-button (click)="copyToPB(elem)">
+          <mat-icon>
+            <fa-icon icon="clipboard"></fa-icon>
+          </mat-icon>
+        </button>
+      </h4>
+      <pre class="prettyprint" [ngClass]="elem.lang">{{elem.display}}</pre>
+    </mat-tab>
+  </mat-tab-group>
+</div>

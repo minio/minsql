@@ -1,0 +1,15 @@
+{
+  "minsql.menu.login": "Sign in",
+  "minsql.menu.logout": "Logout",
+  "minsql.menu.settings": "Settings",
+  "minsql.menu.config": "Configuration",
+
+  "minsql.config.title": "Config",
+  "minsql.logs.title": "Logs",
+  "minsql.tokens.title": "Tokens",
+  "minsql.datastores.title": "Datastores",
+  "minsql.query.title": "Query",
+
+  "minsql.title.long": "MinSQL",
+  "minsql.title.short": "MinSQL"
+}

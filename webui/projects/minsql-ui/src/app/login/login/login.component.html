@@ -1,0 +1,36 @@
+<!--This file is part of MinSQL-->
+<!--Copyright (c) 2019 MinIO, Inc.-->
+
+<!--This program is free software: you can redistribute it and/or modify-->
+<!--it under the terms of the GNU Affero General Public License as published by-->
+<!--the Free Software Foundation, either version 3 of the License, or-->
+<!--(at your option) any later version.-->
+
+<!--This program is distributed in the hope that it will be useful,-->
+<!--but WITHOUT ANY WARRANTY; without even the implied warranty of-->
+<!--MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the-->
+<!--GNU Affero General Public License for more details.-->
+
+<!--You should have received a copy of the GNU Affero General Public License-->
+<!--along with this program.  If not, see <http://www.gnu.org/licenses/>.-->
+
+<div class="login-float">
+  <div class="login-box">
+    <mat-card>
+      <mat-card-content>
+        <form class="example-form" (ngSubmit)="doLogin()">
+          <mat-form-field class="field-full-width">
+            <input matInput placeholder="Username" name="username" [(ngModel)]="accessKey">
+          </mat-form-field>
+
+          <mat-form-field class="field-full-width">
+            <input matInput placeholder="Password" name="password" type="password" [(ngModel)]="secretKey">
+          </mat-form-field>
+          <div class="form-actions">
+            <button mat-raised-button color="primary">Login</button>
+          </div>
+        </form>
+      </mat-card-content>
+    </mat-card>
+  </div>
+</div>

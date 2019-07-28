@@ -1,0 +1,73 @@
+<!--This file is part of MinSQL-->
+<!--Copyright (c) 2019 MinIO, Inc.-->
+
+<!--This program is free software: you can redistribute it and/or modify-->
+<!--it under the terms of the GNU Affero General Public License as published by-->
+<!--the Free Software Foundation, either version 3 of the License, or-->
+<!--(at your option) any later version.-->
+
+<!--This program is distributed in the hope that it will be useful,-->
+<!--but WITHOUT ANY WARRANTY; without even the implied warranty of-->
+<!--MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the-->
+<!--GNU Affero General Public License for more details.-->
+
+<!--You should have received a copy of the GNU Affero General Public License-->
+<!--along with this program.  If not, see <http://www.gnu.org/licenses/>.-->
+
+<div class="content-wrapper">
+
+  <form class="data-form" *ngIf="datastore != null">
+    <mat-card>
+      <mat-card-content>
+        <button mat-icon-button
+                *ngIf="addingNew == false"
+                (click)="delete()"
+                matTooltip="Delete log"
+                style="float:right;">
+          <mat-icon>delete</mat-icon>
+        </button>
+        <h1>DataStore Details</h1>
+
+        <mat-form-field class="field-full-width">
+          <input matInput
+                 placeholder="Name"
+                 name="name"
+                 [(ngModel)]="datastore.name">
+        </mat-form-field>
+
+        <mat-form-field class="field-full-width">
+          <input matInput
+                 placeholder="Endpoint"
+                 name="endpoint"
+                 [(ngModel)]="datastore.endpoint">
+        </mat-form-field>
+
+        <mat-form-field class="field-full-width">
+          <input matInput
+                 placeholder="Bucket"
+                 name="bucket"
+                 [(ngModel)]="datastore.bucket">
+        </mat-form-field>
+
+        <mat-form-field class="field-full-width">
+          <input matInput
+                 placeholder="Access Key"
+                 name="access_key"
+                 [(ngModel)]="datastore.access_key">
+        </mat-form-field>
+
+        <mat-form-field class="field-full-width">
+          <input matInput
+                 placeholder="Secret Key"
+                 name="secret_key"
+                 [(ngModel)]="datastore.secret_key">
+        </mat-form-field>
+      </mat-card-content>
+    </mat-card>
+
+    <div class="form-actions">
+      <button mat-raised-button color="primary" (click)="save()">Save</button>
+    </div>
+
+  </form>
+</div>
