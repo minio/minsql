@@ -35,3 +35,19 @@ pub const IMAGE_JPEG: &str = "image/jpeg";
 pub const APP_JAVASCRIPT: &str = "application/javascript";
 pub const APP_JSON: &str = "application/json";
 pub const TEXT_HTML: &str = "text/html";
+
+bitflags! {
+    // ScanFlags determine which regex should be evaluated
+    // If you are adding new values make sure to add the next power of 2 as
+    // they are evaluated using a bitwise operation
+    pub struct ScanFlags: u32 {
+        const NONE = 1;
+        const IP = 2;
+        const EMAIL = 4;
+        const DATE = 8;
+        const QUOTED = 16;
+        const URL = 32;
+        const PHONE = 64;
+        const USER_AGENT = 128;
+    }
+}

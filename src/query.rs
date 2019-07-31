@@ -32,12 +32,12 @@ use sqlparser::parser::Parser;
 use sqlparser::parser::ParserError;
 use tokio::sync::mpsc;
 
-use bitflags::bitflags;
 use lazy_static::lazy_static;
 
 use crate::auth::Auth;
 use crate::combinators::take_from_iterable::TakeFromIterable;
 use crate::config::Config;
+use crate::constants;
 use crate::constants::{
     SF_DATE, SF_EMAIL, SF_IP, SF_PHONE, SF_QUOTED, SF_URL, SF_USER_AGENT, SMART_FIELDS_RAW_RE,
 };
@@ -46,23 +46,9 @@ use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::http::{return_400, return_401};
+use crate::hyperscan::{build_hs_db, found_patterns_in_line, HSLineScanner, HSPatternMatchResults};
 use crate::storage::{list_msl_bucket_files, read_file_line_by_line};
-
-bitflags! {
-    // ScanFlags determine which regex should be evaluated
-    // If you are adding new values make sure to add the next power of 2 as
-    // they are evaluated using a bitwise operation
-    pub struct ScanFlags: u32 {
-        const NONE = 1;
-        const IP = 2;
-        const EMAIL = 4;
-        const DATE = 8;
-        const QUOTED = 16;
-        const URL = 32;
-        const PHONE = 64;
-        const USER_AGENT = 128;
-    }
-}
+use hyperscan::BlockDatabase;
 
 lazy_static! {
     static ref IP_RE :Regex= Regex::new(r"(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))").unwrap();
@@ -266,6 +252,8 @@ impl Query {
                     let total_querys = parsed_queries.len();
                     let mut writable_state = query_state_holder.write().unwrap();
                     writable_state.query_parsing = parsed_queries;
+                    //release lock
+                    drop(writable_state);
 
                     // prepare copies to go into the next future
 
@@ -286,6 +274,8 @@ impl Query {
                             if preview_query {
                                 limit = 20 as u64;
                             }
+                            //drop the read lock
+                            drop(read_state_holder);
 
                             let logs_ds_len = log_datastores.len();
 
@@ -324,19 +314,123 @@ impl Query {
                                 tokio::spawn(task);
                             }
 
+                            let cfg2 = Arc::clone(&cfg);
+
                             rx.map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
                                 .map(move |lines| {
-                                    let query_state_holder4 = Arc::clone(&query_state_holder3);
-                                    let read_state_holder = query_state_holder4.read().unwrap();
-                                    let q = &read_state_holder.query_parsing[query_index].0;
-                                    let q_parse = &read_state_holder.query_parsing[query_index].1;
-                                    lines
-                                        .into_iter()
-                                        .filter_map(|line| {
-                                            evaluate_query_on_line(&q, &q_parse, line)
-                                            //                                                Some(line)
-                                        })
-                                        .collect::<Vec<String>>()
+                                    let read_cfg = cfg2.read().unwrap();
+                                    if read_cfg.use_hyperscan {
+                                        drop(read_cfg);
+                                        let query_state_holder4 = Arc::clone(&query_state_holder3);
+                                        let mut write_state_holder =
+                                            query_state_holder4.write().unwrap();
+
+                                        let (ref mut _q, ref mut q_parse) = *write_state_holder
+                                            .query_parsing
+                                            .get_mut(query_index)
+                                            .unwrap();
+
+                                        let bdb = q_parse.hs_db.take();
+                                        let mut db = bdb.unwrap();
+
+                                        let mut ls = HSLineScanner::new(&lines);
+                                        let match_holder = ls.scan(&mut db);
+                                        drop(ls);
+
+                                        q_parse.hs_db = Some(db);
+                                        drop(write_state_holder);
+
+                                        // lets print results?
+
+                                        let read_state_holder = query_state_holder3.read().unwrap();
+                                        let query = &read_state_holder.query_parsing[query_index].0;
+                                        let query_data =
+                                            &read_state_holder.query_parsing[query_index].1;
+
+                                        let res = lines
+                                            .into_iter()
+                                            .enumerate()
+                                            .filter_map(|(idx, line)| {
+                                                let mut projection_values: HashMap<
+                                                    String,
+                                                    Option<String>,
+                                                > = HashMap::new();
+
+                                                extract_positional_fields(
+                                                    &mut projection_values,
+                                                    query_data,
+                                                    &line,
+                                                );
+
+                                                let match_holder2 = Arc::clone(&match_holder);
+                                                extract_smart_fields(
+                                                    &mut projection_values,
+                                                    query_data,
+                                                    &line,
+                                                    Some(match_holder2),
+                                                    Some(idx),
+                                                );
+
+                                                // we can skip the line all together if we gonna project an empty line
+                                                if query_data.read_all == false {
+                                                    let mut total_nones = 0;
+                                                    for i in 0..query_data.projections_ordered.len()
+                                                    {
+                                                        let proj =
+                                                            &query_data.projections_ordered[i];
+                                                        if projection_values.contains_key(proj) {
+                                                            let val = projection_values
+                                                                .get(proj)
+                                                                .unwrap();
+                                                            if val.is_none() {
+                                                                total_nones = total_nones + 1;
+                                                            }
+                                                        } else {
+                                                            // we don't even have the requested projection in the found projections
+                                                            total_nones = total_nones + 1;
+                                                        }
+                                                    }
+                                                    if total_nones
+                                                        == query_data.projections_ordered.len()
+                                                    {
+                                                        return None;
+                                                    }
+                                                }
+
+                                                // filter the line
+                                                let skip_line = line_fails_query_conditions(
+                                                    &line,
+                                                    &query,
+                                                    &projection_values,
+                                                );
+                                                if !skip_line {
+                                                    mk_output_line(
+                                                        projection_values,
+                                                        query_data,
+                                                        line,
+                                                    )
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .collect::<Vec<String>>();
+
+                                        res
+                                    } else {
+                                        drop(read_cfg);
+                                        let query_state_holder4 = Arc::clone(&query_state_holder3);
+                                        let read_state_holder = query_state_holder4.read().unwrap();
+                                        let q = &read_state_holder.query_parsing[query_index].0;
+                                        let q_parse =
+                                            &read_state_holder.query_parsing[query_index].1;
+                                        lines
+                                            .into_iter()
+                                            .filter_map(|line| {
+                                                evaluate_query_on_line(&q, &q_parse, line)
+                                                //                                                Some(line)
+                                            })
+                                            .collect::<Vec<String>>()
+                                    }
                                 })
                                 .take_from_iterable(limit)
                         })
@@ -477,23 +571,30 @@ impl Query {
         };
 
         // Build the parsing flags used by scanlog
-        let mut scan_flags: ScanFlags = ScanFlags::NONE;
+        let mut scan_flags: constants::ScanFlags = constants::ScanFlags::NONE;
         for sfield_type in smart_fields_set {
             let flag = match sfield_type.as_ref() {
-                "$ip" => ScanFlags::IP,
-                "$email" => ScanFlags::EMAIL,
-                "$date" => ScanFlags::DATE,
-                "$quoted" => ScanFlags::QUOTED,
-                "$url" => ScanFlags::URL,
-                "$phone" => ScanFlags::PHONE,
-                "$user_agent" => ScanFlags::USER_AGENT,
-                _ => ScanFlags::NONE,
+                "$ip" => constants::ScanFlags::IP,
+                "$email" => constants::ScanFlags::EMAIL,
+                "$date" => constants::ScanFlags::DATE,
+                "$quoted" => constants::ScanFlags::QUOTED,
+                "$url" => constants::ScanFlags::URL,
+                "$phone" => constants::ScanFlags::PHONE,
+                "$user_agent" => constants::ScanFlags::USER_AGENT,
+                _ => constants::ScanFlags::NONE,
             };
-            if scan_flags == ScanFlags::NONE {
+            if scan_flags == constants::ScanFlags::NONE {
                 scan_flags = flag;
             } else {
                 scan_flags = scan_flags | flag;
             }
+        }
+
+        let read_cfg = self.config.read().unwrap();
+
+        let mut hs_db: Option<BlockDatabase> = None;
+        if read_cfg.use_hyperscan {
+            hs_db = Some(build_hs_db(&scan_flags));
         }
 
         // we keep track of the parsing of the queries via their signature.
@@ -507,6 +608,7 @@ impl Query {
                 smart_fields,
                 projections_ordered,
                 limit,
+                hs_db,
             },
         ))
     }
@@ -562,6 +664,7 @@ impl Query {
 
                 let cfg_read = cfg2.read().unwrap();
                 let log = cfg_read.get_log(&q_parse.log_name).unwrap();
+                drop(read_state_holder);
 
                 let ds_name = &log.datastores[log_ds_index];
                 let ds = cfg_read.datastore.get(ds_name).unwrap();
@@ -658,31 +761,31 @@ fn process_fields_for_ast(
     }
 }
 
-pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> {
+pub fn scanlog(text: &String, flags: constants::ScanFlags) -> HashMap<String, Vec<String>> {
     let mut results: HashMap<String, Vec<String>> = HashMap::new();
 
-    if flags.contains(ScanFlags::IP) {
+    if flags.contains(constants::ScanFlags::IP) {
         let mut items: Vec<String> = Vec::new();
         for cap in IP_RE.captures_iter(text) {
             items.push(cap[0].to_string())
         }
         results.insert(SF_IP.to_string(), items);
     }
-    if flags.contains(ScanFlags::EMAIL) {
+    if flags.contains(constants::ScanFlags::EMAIL) {
         let mut items: Vec<String> = Vec::new();
         for cap in EMAIL_RE.captures_iter(text) {
             items.push(cap[0].to_string())
         }
         results.insert(SF_EMAIL.to_string(), items);
     }
-    if flags.contains(ScanFlags::DATE) {
+    if flags.contains(constants::ScanFlags::DATE) {
         let mut items: Vec<String> = Vec::new();
         for cap in DATE_RE.captures_iter(text) {
             items.push(cap[0].to_string())
         }
         results.insert(SF_DATE.to_string(), items);
     }
-    if flags.contains(ScanFlags::QUOTED) {
+    if flags.contains(constants::ScanFlags::QUOTED) {
         let mut items: Vec<String> = Vec::new();
         for cap in QUOTED_RE.captures_iter(text) {
             // Validate whether we matched group 3 or 4 fromt he regex
@@ -694,21 +797,21 @@ pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> 
         }
         results.insert(SF_QUOTED.to_string(), items);
     }
-    if flags.contains(ScanFlags::URL) {
+    if flags.contains(constants::ScanFlags::URL) {
         let mut items: Vec<String> = Vec::new();
         for cap in URL_RE.captures_iter(text) {
             items.push(cap[0].to_string())
         }
         results.insert(SF_URL.to_string(), items);
     }
-    if flags.contains(ScanFlags::PHONE) {
+    if flags.contains(constants::ScanFlags::PHONE) {
         let mut items: Vec<String> = Vec::new();
         for cap in PHONE_RE.captures_iter(text) {
             items.push(cap[0].to_string())
         }
         results.insert(SF_PHONE.to_string(), items);
     }
-    if flags.contains(ScanFlags::USER_AGENT) {
+    if flags.contains(constants::ScanFlags::USER_AGENT) {
         let mut items: Vec<String> = Vec::new();
         for cap in USER_AGENT_RE.captures_iter(text) {
             items.push(cap[1].to_string())
@@ -741,9 +844,17 @@ pub fn extract_smart_fields(
     projection_values: &mut HashMap<String, Option<String>>,
     query_data: &QueryParsing,
     line: &String,
+    match_holder: Option<HSPatternMatchResults>,
+    line_number: Option<usize>,
 ) {
     if query_data.smart_fields.len() > 0 {
-        let found_vals = scanlog(line, query_data.scan_flags);
+        // Use HS patterns in line if a HSPatternMatchResults is passed
+        let found_vals = match match_holder {
+            Some(mc) => {
+                found_patterns_in_line(mc, &(line_number.unwrap() as u16), query_data, &line)
+            }
+            None => scanlog(line, query_data.scan_flags),
+        };
         for smt in &query_data.smart_fields {
             if found_vals.contains_key(&smt.typed[..]) {
                 // if the requested position is available
@@ -900,7 +1011,7 @@ fn evaluate_query_on_line(
 
     // Extract projections
     extract_positional_fields(&mut projection_values, query_data, &line);
-    extract_smart_fields(&mut projection_values, query_data, &line);
+    extract_smart_fields(&mut projection_values, query_data, &line, None, None);
 
     // we can skip the line all together if we gonna project an empty line
     if query_data.read_all == false {
@@ -933,15 +1044,16 @@ fn evaluate_query_on_line(
 
 /// This struct represents the reading and filtering parameters that MinSQL uses to filter and
 /// format the returned data.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct QueryParsing {
     log_name: String,
     read_all: bool,
-    scan_flags: ScanFlags,
+    pub scan_flags: constants::ScanFlags,
     positional_fields: Vec<PositionalColumn>,
     smart_fields: Vec<SmartColumn>,
     projections_ordered: Vec<String>,
     limit: Option<u64>,
+    hs_db: Option<BlockDatabase>,
 }
 
 #[derive(Debug)]
@@ -1090,6 +1202,7 @@ mod query_tests {
             tokens: tokens,
             log: log_map,
             auth: auth,
+            use_hyperscan: false,
         };
         cfg
     }
@@ -1259,7 +1372,7 @@ mod query_tests {
                 );
                 assert_eq!(
                     mqp.scan_flags,
-                    ScanFlags::IP | ScanFlags::EMAIL,
+                    constants::ScanFlags::IP | constants::ScanFlags::EMAIL,
                     "Scan flags don't match"
                 );
                 match mqp.limit {
@@ -1494,10 +1607,10 @@ mod query_tests {
 
     #[test]
     fn scanlog_phone() {
-        let scanflags = ScanFlags::PHONE;
+        let constants::ScanFlags = constants::ScanFlags::PHONE;
         let log_line = "xx (555) 555-5555 xx".to_string();
 
-        let mut results = scanlog(&log_line, scanflags);
+        let mut results = scanlog(&log_line, constants::ScanFlags);
 
         assert!(results.contains_key(SF_PHONE));
         assert_eq!(
