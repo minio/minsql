@@ -343,9 +343,8 @@ impl Query {
                                         // lets print results?
 
                                         let read_state_holder = query_state_holder3.read().unwrap();
-                                        let query = &read_state_holder.query_parsing[query_index].0;
-                                        let query_data =
-                                            &read_state_holder.query_parsing[query_index].1;
+                                        let (ref query, ref query_data) =
+                                            *(&read_state_holder.query_parsing[query_index]);
 
                                         let res = lines
                                             .into_iter()

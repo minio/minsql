@@ -2,6 +2,7 @@ use crate::constants;
 use crate::constants::{SF_DATE, SF_EMAIL, SF_IP, SF_PHONE, SF_QUOTED, SF_URL, SF_USER_AGENT};
 use crate::query::QueryParsing;
 use hyperscan::*;
+use log::debug;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
