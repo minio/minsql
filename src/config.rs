@@ -29,7 +29,6 @@ pub const METABUCKET_ENDPOINT: &str = "MINSQL_METABUCKET_ENDPOINT";
 pub const METABUCKET_NAME: &str = "MINSQL_METABUCKET_NAME";
 pub const METABUCKET_ACCESS_KEY: &str = "MINSQL_METABUCKET_ACCESS_KEY";
 pub const METABUCKET_SECRET_KEY: &str = "MINSQL_METABUCKET_SECRET_KEY";
-pub const USE_HYPERSCAN: &str = "MINSQL_USE_HYPERSCAN";
 pub const PKCS12_CERT: &str = "MINSQL_PKCS12_CERT";
 pub const PKCS12_PASSWORD: &str = "MINSQL_PKCS12_PASSWORD";
 
@@ -44,7 +43,6 @@ pub struct Config {
     pub tokens: HashMap<String, Token>,
     #[serde(default = "HashMap::new")]
     pub auth: HashMap<String, HashMap<String, LogAuth>>,
-    pub use_hyperscan: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -110,7 +108,6 @@ impl Config {
             log: HashMap::new(),
             auth: HashMap::new(),
             tokens: HashMap::new(),
-            use_hyperscan: false,
         }
     }
 
@@ -230,14 +227,6 @@ pub fn load_configuration() -> Result<Config, ConfigurationError> {
             )));
         }
     };
-    // are we using hyperscan?
-    let use_hyperscan: bool = match env::var(USE_HYPERSCAN) {
-        Ok(val) => match &val.to_lowercase()[..] {
-            "true" => true,
-            _ => false,
-        },
-        Err(_) => false,
-    };
 
     // Certificates are optional.
 
@@ -262,7 +251,6 @@ pub fn load_configuration() -> Result<Config, ConfigurationError> {
     };
 
     let mut configuration = Config::new(server);
-    configuration.use_hyperscan = use_hyperscan;
 
     // store datasource names in the structs
     for (name, ds) in &mut configuration.datastore {

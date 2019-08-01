@@ -113,7 +113,7 @@ impl<'a> HSLineScanner<'a> {
         let line_total = self.lines.len();
         let scratch = db.alloc().unwrap();
 
-        let match_holder: HSPatternMatchResults = Arc::new(RwLock::new(HashMap::new()));
+        let pattern_match_results: HSPatternMatchResults = Arc::new(RwLock::new(HashMap::new()));
 
         for i in 0..line_total {
             db.scan_mut(
@@ -124,7 +124,7 @@ impl<'a> HSLineScanner<'a> {
                 Some(&mut HSScanPair {
                     line: &self.lines[i],
                     line_index: i as u16,
-                    match_holder: Arc::clone(&match_holder),
+                    pattern_match_results: Arc::clone(&pattern_match_results),
                 }),
             )
             .unwrap();
@@ -132,19 +132,19 @@ impl<'a> HSLineScanner<'a> {
 
         debug!("scan completed in {:?}", now.elapsed());
 
-        match_holder
+        pattern_match_results
     }
 }
 
 struct HSScanPair<'a> {
     pub line: &'a String,
-    pub match_holder: HSPatternMatchResults,
+    pub pattern_match_results: HSPatternMatchResults,
     pub line_index: u16,
 }
 
 fn callback_block(id: u32, from: u64, to: u64, _flags: u32, context: &mut HSScanPair) -> u32 {
     //  Get the patterns matched for this line, else insert new map
-    let mut line_map = context.match_holder.write().unwrap();
+    let mut line_map = context.pattern_match_results.write().unwrap();
 
     if line_map.contains_key(&context.line_index) == false {
         line_map.insert(context.line_index.clone(), RwLock::new(HashMap::new()));
@@ -217,15 +217,15 @@ pub fn alloc_result_map(flags: &constants::ScanFlags) -> HashMap<String, Vec<Str
 }
 
 pub fn found_patterns_in_line(
-    match_holder: HSPatternMatchResults,
+    pattern_match_results: HSPatternMatchResults,
     line_index: &u16,
     query_data: &QueryParsing,
     line: &String,
 ) -> HashMap<String, Vec<String>> {
     // Retain only the lines with matches
-    let read_match_hold = match_holder.read().unwrap();
+    let read_match_hold = pattern_match_results.read().unwrap();
     let mut found_vals: HashMap<String, Vec<String>> = alloc_result_map(&query_data.scan_flags);
-    // only the lines reported in match_holder have the desired projections
+    // only the lines reported in pattern_match_results have the desired projections
     if read_match_hold.contains_key(line_index) {
         let patterns = read_match_hold.get(line_index).unwrap();
 
