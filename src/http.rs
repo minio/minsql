@@ -23,6 +23,7 @@ use futures::{future, Future};
 use hyper::{Body, Method, Request, Response, StatusCode};
 use log::info;
 use serde_derive::Serialize;
+use std::borrow::Cow;
 
 use crate::api::Api;
 use crate::auth::Auth;
@@ -30,6 +31,10 @@ use crate::config::Config;
 use crate::constants::{APP_JAVASCRIPT, APP_JSON, IMAGE_JPEG, TEXT_HTML, UNKNOWN_CONTENT_TYPE};
 use crate::ingest::{Ingest, IngestBuffer};
 use crate::query::Query;
+
+#[derive(RustEmbed)]
+#[folder = "static/"]
+struct Asset;
 
 pub type GenericError = Box<dyn std::error::Error + Send + Sync>;
 pub type ResponseFuture = Box<Future<Item = Response<Body>, Error = GenericError> + Send>;
@@ -221,7 +226,7 @@ pub enum HeaderToken {
 
 /// Serves content from the `static` folder
 fn serve_static_content(req: Request<Body>) -> ResponseFuture {
-    let mut full_path = "static".to_owned() + &req.uri().path().clone();
+    let mut full_path: String = req.uri().path()[1..].to_string();
 
     let mut content_type = match Path::new(req.uri().path())
         .extension()
@@ -250,38 +255,38 @@ fn serve_static_content(req: Request<Body>) -> ResponseFuture {
     let parts: Vec<&str> = request_path_no_slash.split("/").collect();
 
     // append index.html to path. if the path ends up with `ui/`
-    if (full_path[full_path.len() - 3..] == *"ui/")
+    if (full_path.len() >= 2 && full_path[full_path.len() - 2..] == *"ui")
+        || (full_path.len() >= 3 && full_path[full_path.len() - 3..] == *"ui/")
         || (parts.len() >= 2 && parts[1] != "assets" && parts[1].contains(".") == false)
     {
-        full_path = "static/ui/index.html".to_string();
+        full_path = "ui/index.html".to_string();
         content_type = TEXT_HTML;
     }
 
-    Box::new(
-        tokio::fs::file::File::open(full_path)
-            .and_then(move |file| {
-                let buf: Vec<u8> = Vec::new();
-                tokio_io::io::read_to_end(file, buf)
-                    .and_then(move |item| {
-                        Ok(Response::builder()
-                            .header("Content-Type", content_type)
-                            .body(item.1.into())
-                            .unwrap())
-                    })
-                    .or_else(|_| {
-                        Ok(Response::builder()
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(Body::empty())
-                            .unwrap())
-                    })
-            })
-            .or_else(|_| {
-                Ok(Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body("Not Found".into())
-                    .unwrap())
-            }),
-    )
+    // Build response based on wether the requested asset is found or not
+
+    match Asset::get(&full_path[..]) {
+        Some(ast) => match ast {
+            Cow::Owned(data) => Box::new(future::ok(
+                Response::builder()
+                    .header("Content-Type", content_type)
+                    .body(Body::from(data))
+                    .unwrap(),
+            )),
+            Cow::Borrowed(data) => Box::new(future::ok(
+                Response::builder()
+                    .header("Content-Type", content_type)
+                    .body(Body::from(data))
+                    .unwrap(),
+            )),
+        },
+        None => Box::new(future::ok(
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body("Not Found".into())
+                .unwrap(),
+        )),
+    }
 }
 
 #[cfg(test)]

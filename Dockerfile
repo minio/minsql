@@ -27,6 +27,7 @@ FROM minio/minsql:deps as rust_builder
 
 WORKDIR /usr/src/minsql
 COPY . .
+COPY --from=ui_builder /usr/src/app/dist/minsql-ui ./static/ui
 
 RUN cargo install --path .
 
@@ -37,6 +38,5 @@ FROM alpine:3.9
 WORKDIR /
 
 COPY --from=rust_builder /root/.cargo/bin/minsql /usr/bin/minsql
-COPY --from=ui_builder /usr/src/app/dist/minsql-ui /static/ui
 
 CMD ["minsql"]

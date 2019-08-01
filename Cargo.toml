@@ -3,6 +3,9 @@ name = "minsql"
 version = "0.1.0"
 authors = ["Daniel Valdivia <daniel@minio.io>"]
 edition = "2018"
+license = "AGPL"
+repository = "https://github.com/minio/minsql"
+keywords = ["http", "object storage", "log", "search", "logs"]
 
 [dependencies]
 
@@ -23,6 +26,7 @@ regex = "1.1.9"
 rusoto_core = "0.40.0"
 rusoto_credential = "0.40.0"
 rusoto_s3 = "0.40.0"
+rust-embed="5.1.0"
 serde = "1.0.94"
 serde_derive = "1.0.94"
 serde_json = "1.0.40"

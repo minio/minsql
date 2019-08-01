@@ -17,6 +17,9 @@
 #[macro_use]
 extern crate bitflags;
 
+#[macro_use]
+extern crate rust_embed;
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, Read};
