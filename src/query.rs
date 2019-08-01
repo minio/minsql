@@ -916,7 +916,7 @@ pub struct QueryParsing {
     smart_fields: Vec<SmartColumn>,
     projections_ordered: Vec<String>,
     limit: Option<u64>,
-    hs_db: Option<BlockDatabase>,
+    pub hs_db: Option<BlockDatabase>,
 }
 
 #[derive(Debug)]
@@ -1400,15 +1400,25 @@ mod query_tests {
         let query = tc.query;
         let ast = query_c.parse_query(query.clone()).unwrap();
 
-        let queries_parse = query_c.process_sql(&access_token, ast).unwrap();
+        let mut queries_parse = query_c.process_sql(&access_token, ast).unwrap();
 
         let log_line = tc.log_line;
+        let lines: Vec<String> = vec![log_line.clone()];
 
-        let (the_query, query_data) = match queries_parse.get(0).unwrap() {
+        let (ref mut the_query, ref mut query_data) = match queries_parse.get_mut(0).unwrap() {
             (x, y) => (x, y),
         };
 
-        let res = evaluate_query_on_line(&the_query, query_data, log_line);
+        let bdb = query_data.hs_db.take();
+        let mut db = bdb.unwrap();
+
+        let mut ls = HSLineScanner::new(&lines);
+        let pattern_match_results = ls.scan(&mut db);
+        // drop ls so the borrow on lines is returned
+        drop(ls);
+
+        let res =
+            evaluate_query_on_line(&the_query, query_data, 0, log_line, pattern_match_results);
 
         let payload = res.unwrap();
         let res_json: serde_json::Value = serde_json::from_str(&payload).unwrap();

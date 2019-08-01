@@ -173,16 +173,25 @@ fn callback_block(id: u32, from: u64, to: u64, _flags: u32, context: &mut HSScan
         });
     } else {
         // else compare to previous matches to make sure we only keep the longest
+        let mut collision = false;
         for i in 0..pattern_matches.len() {
             // if we have another pattern starting in the same spot, we probably have an overlap
             // keep the longest
             if pattern_matches[i].from == from && pattern_matches[i].to < to {
+                collision = true;
                 pattern_matches[i] = HSPatternMatch {
                     pattern_id: id,
                     from: from,
                     to: to,
                 };
             }
+        }
+        if collision == false {
+            pattern_matches.push(HSPatternMatch {
+                pattern_id: id,
+                from: from,
+                to: to,
+            });
         }
     }
 
@@ -235,6 +244,7 @@ pub fn found_patterns_in_line(
             for pm in datum {
                 match *pat_id as usize {
                     P_IP => {
+                        println!("found IP!");
                         found_vals
                             .get_mut(SF_IP)
                             .unwrap()
@@ -256,7 +266,7 @@ pub fn found_patterns_in_line(
                         found_vals
                             .get_mut(SF_QUOTED)
                             .unwrap()
-                            .push(line[pm.from as usize..pm.to as usize].to_string());
+                            .push(line[(pm.from + 1) as usize..(pm.to - 1) as usize].to_string());
                     }
                     P_URL => {
                         found_vals
