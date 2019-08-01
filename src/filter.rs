@@ -242,7 +242,7 @@ mod filter_tests {
     use crate::query::{extract_positional_fields, extract_smart_fields, Query};
 
     use super::*;
-    use crate::hyperscan::HSLineScanner;
+    use crate::hyperscan::{HSLineScanner, HSPatternMatchResults};
 
     // Generates a Config object with only one auth item for one log
     fn get_ds_log_auth_config_for(log_name: String, token: &String) -> Config {
@@ -305,13 +305,21 @@ mod filter_tests {
         let mut projection_values: HashMap<String, Option<String>> = HashMap::new();
         // scan
         let lines: Vec<String> = vec![line.clone()];
-        let bdb = query_data.hs_db.take();
-        let mut db = bdb.unwrap();
+        let pattern_match_results: HSPatternMatchResults = match query_data.hs_db.take() {
+            Some(mut db) => {
+                //                                            let bdb = q_parse.hs_db.take();
+                //                                            let mut db = bdb.unwrap();
 
-        let mut ls = HSLineScanner::new(&lines);
-        let pattern_match_results = ls.scan(&mut db);
-        // drop ls so the borrow on lines is returned
-        drop(ls);
+                let mut ls = HSLineScanner::new(&lines);
+                let pattern_match_results = ls.scan(&mut db);
+                // drop ls so the borrow on lines is returned
+                drop(ls);
+
+                query_data.hs_db = Some(db);
+                pattern_match_results
+            }
+            None => Arc::new(RwLock::new(HashMap::new())),
+        };
         // Extract projections
         extract_positional_fields(&mut projection_values, query_data, &line);
         extract_smart_fields(

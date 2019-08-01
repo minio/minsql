@@ -16,7 +16,7 @@ pub const P_PHONE: usize = 5;
 pub const P_USER_AGENT: usize = 6;
 pub const P_URL: usize = 7;
 
-pub fn build_hs_db(flags: &constants::ScanFlags) -> BlockDatabase {
+pub fn build_hs_db(flags: &constants::ScanFlags) -> Option<BlockDatabase> {
     let pattern_list: HashMap<usize, String> = [
         (P_TEST, "test".to_string()),
         (P_EMAIL, "([\\w\\.!#$%&'*+\\-=?\\^_`{|}~]+@([\\w\\d-]+\\.)+[\\w]{2,4})".to_string()),
@@ -80,8 +80,12 @@ pub fn build_hs_db(flags: &constants::ScanFlags) -> BlockDatabase {
         });
     }
 
-    let db: BlockDatabase = patterns.build().unwrap();
-    db
+    let res_db: Result<BlockDatabase, _> = patterns.build();
+
+    match res_db {
+        Ok(db) => Some(db),
+        Err(_) => None,
+    }
 }
 
 pub struct HSPatternMatch {
@@ -284,7 +288,7 @@ pub fn found_patterns_in_line(
                         found_vals
                             .get_mut(SF_USER_AGENT)
                             .unwrap()
-                            .push(line[pm.from as usize..pm.to as usize].to_string());
+                            .push(line[(pm.from + 1) as usize..(pm.to - 1) as usize].to_string());
                     }
                     _ => (),
                 }

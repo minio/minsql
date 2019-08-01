@@ -317,16 +317,23 @@ impl Query {
                                         .get_mut(query_index)
                                         .unwrap();
 
-                                    let bdb = q_parse.hs_db.take();
-                                    let mut db = bdb.unwrap();
+                                    let pattern_match_results: HSPatternMatchResults =
+                                        match q_parse.hs_db.take() {
+                                            Some(mut db) => {
+                                                //                                            let bdb = q_parse.hs_db.take();
+                                                //                                            let mut db = bdb.unwrap();
 
-                                    let mut ls = HSLineScanner::new(&lines);
-                                    let pattern_match_results = ls.scan(&mut db);
-                                    // drop ls so the borrow on lines is returned
-                                    drop(ls);
+                                                let mut ls = HSLineScanner::new(&lines);
+                                                let pattern_match_results = ls.scan(&mut db);
+                                                // drop ls so the borrow on lines is returned
+                                                drop(ls);
 
-                                    q_parse.hs_db = Some(db);
-                                    drop(write_state_holder);
+                                                q_parse.hs_db = Some(db);
+                                                drop(write_state_holder);
+                                                pattern_match_results
+                                            }
+                                            None => Arc::new(RwLock::new(HashMap::new())),
+                                        };
 
                                     // lets process the results
 
@@ -510,7 +517,7 @@ impl Query {
             }
         }
 
-        let hs_db: Option<BlockDatabase> = Some(build_hs_db(&scan_flags));
+        let hs_db: Option<BlockDatabase> = build_hs_db(&scan_flags);
 
         // we keep track of the parsing of the queries via their signature.
         Ok((
