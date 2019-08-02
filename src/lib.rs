@@ -46,6 +46,7 @@ mod constants;
 mod dialect;
 mod filter;
 mod http;
+mod hyperscan;
 mod ingest;
 mod meta;
 mod query;

@@ -32,47 +32,23 @@ use sqlparser::parser::Parser;
 use sqlparser::parser::ParserError;
 use tokio::sync::mpsc;
 
-use bitflags::bitflags;
 use lazy_static::lazy_static;
 
 use crate::auth::Auth;
 use crate::combinators::take_from_iterable::TakeFromIterable;
 use crate::config::Config;
-use crate::constants::{
-    SF_DATE, SF_EMAIL, SF_IP, SF_PHONE, SF_QUOTED, SF_URL, SF_USER_AGENT, SMART_FIELDS_RAW_RE,
-};
+use crate::constants;
+use crate::constants::{SF_USER_AGENT, SMART_FIELDS_RAW_RE};
 use crate::dialect::MinSQLDialect;
 use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::http::{return_400, return_401};
+use crate::hyperscan::{build_hs_db, found_patterns_in_line, HSLineScanner, HSPatternMatchResults};
 use crate::storage::{list_msl_bucket_files, read_file_line_by_line};
-
-bitflags! {
-    // ScanFlags determine which regex should be evaluated
-    // If you are adding new values make sure to add the next power of 2 as
-    // they are evaluated using a bitwise operation
-    pub struct ScanFlags: u32 {
-        const NONE = 1;
-        const IP = 2;
-        const EMAIL = 4;
-        const DATE = 8;
-        const QUOTED = 16;
-        const URL = 32;
-        const PHONE = 64;
-        const USER_AGENT = 128;
-    }
-}
+use hyperscan::BlockDatabase;
 
 lazy_static! {
-    static ref IP_RE :Regex= Regex::new(r"(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))").unwrap();
-    static ref EMAIL_RE :Regex= Regex::new(r"([\w\.!#$%&'*+\-=?\^_`{|}~]+@([\w\d-]+\.)+[\w]{2,4})").unwrap();
-    // TODO: This regex matches a fairly simple date format, improve : 2019-05-23
-    static ref DATE_RE :Regex= Regex::new(r"((19[789]\d|2\d{3})[-/](0[1-9]|1[1-2])[-/](0[1-9]|[1-2][0-9]|3[0-1]*))|((0[1-9]|[1-2][0-9]|3[0-1]*)[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|(0[1-9]|1[1-2]))[-/](19[789]\d|2\d{3}))").unwrap();
-    static ref QUOTED_RE :Regex= Regex::new("((\"(.*?)\")|'(.*?)')").unwrap();
-    static ref URL_RE :Regex= Regex::new(r#"(https?|ftp)://[^\s/$.?#].[^()\]\[\s]*"#).unwrap();
-    static ref PHONE_RE :Regex= Regex::new(r#"[\(]?(\d{3})[\)-]?[- ]?(\d{3})[- ]?(\d{4})"#).unwrap();
-    static ref USER_AGENT_RE :Regex= Regex::new(r#""((Mozilla|Links).*? \(.*?\)( .*?[0-9]{1,3}\.[0-9]{1,3}\.?[0-9]{0,3})?)""#).unwrap();
     static ref SMART_FIELDS_RE: Regex = Regex::new(SMART_FIELDS_RAW_RE).unwrap();
 }
 
@@ -266,6 +242,8 @@ impl Query {
                     let total_querys = parsed_queries.len();
                     let mut writable_state = query_state_holder.write().unwrap();
                     writable_state.query_parsing = parsed_queries;
+                    //release lock
+                    drop(writable_state);
 
                     // prepare copies to go into the next future
 
@@ -286,6 +264,8 @@ impl Query {
                             if preview_query {
                                 limit = 20 as u64;
                             }
+                            //drop the read lock
+                            drop(read_state_holder);
 
                             let logs_ds_len = log_datastores.len();
 
@@ -326,17 +306,58 @@ impl Query {
 
                             rx.map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
                                 .map(move |lines| {
+                                    // Perform scan via Hyperscan
+                                    // TODO: Remove the lock around the DB as this is definetively a problem
                                     let query_state_holder4 = Arc::clone(&query_state_holder3);
-                                    let read_state_holder = query_state_holder4.read().unwrap();
-                                    let q = &read_state_holder.query_parsing[query_index].0;
-                                    let q_parse = &read_state_holder.query_parsing[query_index].1;
-                                    lines
+                                    let mut write_state_holder =
+                                        query_state_holder4.write().unwrap();
+
+                                    let (ref mut _q, ref mut q_parse) = *write_state_holder
+                                        .query_parsing
+                                        .get_mut(query_index)
+                                        .unwrap();
+
+                                    let pattern_match_results: HSPatternMatchResults =
+                                        match q_parse.hs_db.take() {
+                                            Some(mut db) => {
+                                                //                                            let bdb = q_parse.hs_db.take();
+                                                //                                            let mut db = bdb.unwrap();
+
+                                                let mut ls = HSLineScanner::new(&lines);
+                                                let pattern_match_results = ls.scan(&mut db);
+                                                // drop ls so the borrow on lines is returned
+                                                drop(ls);
+
+                                                q_parse.hs_db = Some(db);
+                                                drop(write_state_holder);
+                                                pattern_match_results
+                                            }
+                                            None => Arc::new(RwLock::new(HashMap::new())),
+                                        };
+
+                                    // lets process the results
+
+                                    let read_state_holder = query_state_holder3.read().unwrap();
+                                    let (ref query, ref query_data) =
+                                        *(&read_state_holder.query_parsing[query_index]);
+
+                                    let res = lines
                                         .into_iter()
-                                        .filter_map(|line| {
-                                            evaluate_query_on_line(&q, &q_parse, line)
-                                            //                                                Some(line)
+                                        .enumerate()
+                                        .filter_map(|(line_index, line)| {
+                                            let pattern_match_results2 =
+                                                Arc::clone(&pattern_match_results);
+                                            evaluate_query_on_line(
+                                                query,
+                                                query_data,
+                                                line_index,
+                                                line,
+                                                pattern_match_results2,
+                                            )
                                         })
-                                        .collect::<Vec<String>>()
+                                        .collect::<Vec<String>>();
+
+                                    res
                                 })
                                 .take_from_iterable(limit)
                         })
@@ -477,24 +498,26 @@ impl Query {
         };
 
         // Build the parsing flags used by scanlog
-        let mut scan_flags: ScanFlags = ScanFlags::NONE;
+        let mut scan_flags: constants::ScanFlags = constants::ScanFlags::NONE;
         for sfield_type in smart_fields_set {
             let flag = match sfield_type.as_ref() {
-                "$ip" => ScanFlags::IP,
-                "$email" => ScanFlags::EMAIL,
-                "$date" => ScanFlags::DATE,
-                "$quoted" => ScanFlags::QUOTED,
-                "$url" => ScanFlags::URL,
-                "$phone" => ScanFlags::PHONE,
-                "$user_agent" => ScanFlags::USER_AGENT,
-                _ => ScanFlags::NONE,
+                "$ip" => constants::ScanFlags::IP,
+                "$email" => constants::ScanFlags::EMAIL,
+                "$date" => constants::ScanFlags::DATE,
+                "$quoted" => constants::ScanFlags::QUOTED,
+                "$url" => constants::ScanFlags::URL,
+                "$phone" => constants::ScanFlags::PHONE,
+                "$user_agent" => constants::ScanFlags::USER_AGENT,
+                _ => constants::ScanFlags::NONE,
             };
-            if scan_flags == ScanFlags::NONE {
+            if scan_flags == constants::ScanFlags::NONE {
                 scan_flags = flag;
             } else {
                 scan_flags = scan_flags | flag;
             }
         }
+
+        let hs_db: Option<BlockDatabase> = build_hs_db(&scan_flags);
 
         // we keep track of the parsing of the queries via their signature.
         Ok((
@@ -507,6 +530,7 @@ impl Query {
                 smart_fields,
                 projections_ordered,
                 limit,
+                hs_db,
             },
         ))
     }
@@ -562,6 +586,7 @@ impl Query {
 
                 let cfg_read = cfg2.read().unwrap();
                 let log = cfg_read.get_log(&q_parse.log_name).unwrap();
+                drop(read_state_holder);
 
                 let ds_name = &log.datastores[log_ds_index];
                 let ds = cfg_read.datastore.get(ds_name).unwrap();
@@ -658,66 +683,6 @@ fn process_fields_for_ast(
     }
 }
 
-pub fn scanlog(text: &String, flags: ScanFlags) -> HashMap<String, Vec<String>> {
-    let mut results: HashMap<String, Vec<String>> = HashMap::new();
-
-    if flags.contains(ScanFlags::IP) {
-        let mut items: Vec<String> = Vec::new();
-        for cap in IP_RE.captures_iter(text) {
-            items.push(cap[0].to_string())
-        }
-        results.insert(SF_IP.to_string(), items);
-    }
-    if flags.contains(ScanFlags::EMAIL) {
-        let mut items: Vec<String> = Vec::new();
-        for cap in EMAIL_RE.captures_iter(text) {
-            items.push(cap[0].to_string())
-        }
-        results.insert(SF_EMAIL.to_string(), items);
-    }
-    if flags.contains(ScanFlags::DATE) {
-        let mut items: Vec<String> = Vec::new();
-        for cap in DATE_RE.captures_iter(text) {
-            items.push(cap[0].to_string())
-        }
-        results.insert(SF_DATE.to_string(), items);
-    }
-    if flags.contains(ScanFlags::QUOTED) {
-        let mut items: Vec<String> = Vec::new();
-        for cap in QUOTED_RE.captures_iter(text) {
-            // Validate whether we matched group 3 or 4 fromt he regex
-            if cap.get(3) != None {
-                items.push(cap[3].to_string())
-            } else {
-                items.push(cap[4].to_string())
-            }
-        }
-        results.insert(SF_QUOTED.to_string(), items);
-    }
-    if flags.contains(ScanFlags::URL) {
-        let mut items: Vec<String> = Vec::new();
-        for cap in URL_RE.captures_iter(text) {
-            items.push(cap[0].to_string())
-        }
-        results.insert(SF_URL.to_string(), items);
-    }
-    if flags.contains(ScanFlags::PHONE) {
-        let mut items: Vec<String> = Vec::new();
-        for cap in PHONE_RE.captures_iter(text) {
-            items.push(cap[0].to_string())
-        }
-        results.insert(SF_PHONE.to_string(), items);
-    }
-    if flags.contains(ScanFlags::USER_AGENT) {
-        let mut items: Vec<String> = Vec::new();
-        for cap in USER_AGENT_RE.captures_iter(text) {
-            items.push(cap[1].to_string())
-        }
-        results.insert(SF_USER_AGENT.to_string(), items);
-    }
-    results
-}
-
 pub fn extract_positional_fields(
     projection_values: &mut HashMap<String, Option<String>>,
     query_data: &QueryParsing,
@@ -741,9 +706,17 @@ pub fn extract_smart_fields(
     projection_values: &mut HashMap<String, Option<String>>,
     query_data: &QueryParsing,
     line: &String,
+    pattern_match_results: HSPatternMatchResults,
+    line_number: usize,
 ) {
     if query_data.smart_fields.len() > 0 {
-        let found_vals = scanlog(line, query_data.scan_flags);
+        // Use HS patterns in line if a HSPatternMatchResults is passed
+        let found_vals = found_patterns_in_line(
+            pattern_match_results,
+            &(line_number as u16),
+            query_data,
+            &line,
+        );
         for smt in &query_data.smart_fields {
             if found_vals.contains_key(&smt.typed[..]) {
                 // if the requested position is available
@@ -894,13 +867,21 @@ fn mk_output_line(
 fn evaluate_query_on_line(
     query: &Statement,
     query_data: &QueryParsing,
+    line_index: usize,
     line: String,
+    pattern_match_results: HSPatternMatchResults,
 ) -> Option<String> {
     let mut projection_values: HashMap<String, Option<String>> = HashMap::new();
 
-    // Extract projections
     extract_positional_fields(&mut projection_values, query_data, &line);
-    extract_smart_fields(&mut projection_values, query_data, &line);
+
+    extract_smart_fields(
+        &mut projection_values,
+        query_data,
+        &line,
+        pattern_match_results,
+        line_index,
+    );
 
     // we can skip the line all together if we gonna project an empty line
     if query_data.read_all == false {
@@ -933,15 +914,16 @@ fn evaluate_query_on_line(
 
 /// This struct represents the reading and filtering parameters that MinSQL uses to filter and
 /// format the returned data.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct QueryParsing {
     log_name: String,
     read_all: bool,
-    scan_flags: ScanFlags,
+    pub scan_flags: constants::ScanFlags,
     positional_fields: Vec<PositionalColumn>,
     smart_fields: Vec<SmartColumn>,
     projections_ordered: Vec<String>,
     limit: Option<u64>,
+    pub hs_db: Option<BlockDatabase>,
 }
 
 #[derive(Debug)]
@@ -1259,7 +1241,7 @@ mod query_tests {
                 );
                 assert_eq!(
                     mqp.scan_flags,
-                    ScanFlags::IP | ScanFlags::EMAIL,
+                    constants::ScanFlags::IP | constants::ScanFlags::EMAIL,
                     "Scan flags don't match"
                 );
                 match mqp.limit {
@@ -1425,15 +1407,25 @@ mod query_tests {
         let query = tc.query;
         let ast = query_c.parse_query(query.clone()).unwrap();
 
-        let queries_parse = query_c.process_sql(&access_token, ast).unwrap();
+        let mut queries_parse = query_c.process_sql(&access_token, ast).unwrap();
 
         let log_line = tc.log_line;
+        let lines: Vec<String> = vec![log_line.clone()];
 
-        let (the_query, query_data) = match queries_parse.get(0).unwrap() {
+        let (ref mut the_query, ref mut query_data) = match queries_parse.get_mut(0).unwrap() {
             (x, y) => (x, y),
         };
 
-        let res = evaluate_query_on_line(&the_query, query_data, log_line);
+        let bdb = query_data.hs_db.take();
+        let mut db = bdb.unwrap();
+
+        let mut ls = HSLineScanner::new(&lines);
+        let pattern_match_results = ls.scan(&mut db);
+        // drop ls so the borrow on lines is returned
+        drop(ls);
+
+        let res =
+            evaluate_query_on_line(&the_query, query_data, 0, log_line, pattern_match_results);
 
         let payload = res.unwrap();
         let res_json: serde_json::Value = serde_json::from_str(&payload).unwrap();
@@ -1492,17 +1484,4 @@ mod query_tests {
         run_parse_and_match_case(tc);
     }
 
-    #[test]
-    fn scanlog_phone() {
-        let scanflags = ScanFlags::PHONE;
-        let log_line = "xx (555) 555-5555 xx".to_string();
-
-        let mut results = scanlog(&log_line, scanflags);
-
-        assert!(results.contains_key(SF_PHONE));
-        assert_eq!(
-            results.remove(SF_PHONE).unwrap(),
-            vec!["(555) 555-5555".to_string()]
-        );
-    }
 }

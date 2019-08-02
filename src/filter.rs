@@ -242,6 +242,7 @@ mod filter_tests {
     use crate::query::{extract_positional_fields, extract_smart_fields, Query};
 
     use super::*;
+    use crate::hyperscan::{HSLineScanner, HSPatternMatchResults};
 
     // Generates a Config object with only one auth item for one log
     fn get_ds_log_auth_config_for(log_name: String, token: &String) -> Config {
@@ -298,13 +299,37 @@ mod filter_tests {
         let query_c = Query::new(cfg);
 
         let qparse = query_c.parse_query(query_stmt).unwrap();
-        let qparsing = query_c.process_sql(&access_token, qparse).unwrap();
-        let query = &qparsing.get(0).unwrap().0;
-        let query_data = &qparsing.get(0).unwrap().1;
+        let mut qparsing = query_c.process_sql(&access_token, qparse).unwrap();
+        let (ref query, ref mut query_data) = *qparsing.get_mut(0).unwrap();
+        //        let mut query_data = &qparsing.get_mut(0).unwrap().1;
         let mut projection_values: HashMap<String, Option<String>> = HashMap::new();
+        // scan
+        let lines: Vec<String> = vec![line.clone()];
+        let pattern_match_results: HSPatternMatchResults = match query_data.hs_db.take() {
+            Some(mut db) => {
+                //                                            let bdb = q_parse.hs_db.take();
+                //                                            let mut db = bdb.unwrap();
+
+                let mut ls = HSLineScanner::new(&lines);
+                let pattern_match_results = ls.scan(&mut db);
+                // drop ls so the borrow on lines is returned
+                drop(ls);
+
+                query_data.hs_db = Some(db);
+                pattern_match_results
+            }
+            None => Arc::new(RwLock::new(HashMap::new())),
+        };
         // Extract projections
         extract_positional_fields(&mut projection_values, query_data, &line);
-        extract_smart_fields(&mut projection_values, query_data, &line);
+        extract_smart_fields(
+            &mut projection_values,
+            query_data,
+            &line,
+            pattern_match_results,
+            0,
+        );
+        println!("{:?}", projection_values);
         return (query.clone(), projection_values);
     }
 
