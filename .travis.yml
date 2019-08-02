@@ -57,6 +57,7 @@ before_script:
   - .travis/build-hyperscan.sh
 
 script:
+  - mkdir static
   - cargo fmt --all -- --check
   - cargo build --verbose --all
   - cargo test --verbose --all
