@@ -26,6 +26,7 @@ use futures::{stream, Future, Stream};
 use hyper::{Body, Chunk, Request, Response};
 use log::{error, info};
 use regex::Regex;
+use serde_derive::{Deserialize, Serialize};
 use serde_json::json;
 use sqlparser::ast::{BinaryOperator, Expr, SelectItem, SetExpr, Statement, Value};
 use sqlparser::parser::Parser;
@@ -44,7 +45,9 @@ use crate::filter::line_fails_query_conditions;
 use crate::http::GenericError;
 use crate::http::ResponseFuture;
 use crate::http::{return_400, return_401};
-use crate::hyperscan::{build_hs_db, found_patterns_in_line, HSLineScanner, HSPatternMatchResults};
+use crate::hyperscan::{
+    build_hs_db, found_patterns_in_line, HSLineScanner, HSPatternMatch, HSPatternMatchResults,
+};
 use crate::storage::{list_msl_bucket_files, read_file_line_by_line};
 use hyperscan::BlockDatabase;
 
@@ -198,6 +201,24 @@ impl Query {
             None => false,
         };
 
+        // Check for `MINSQL-EXPLORE: true` header
+        let explore_query = match &req.headers().get("MINSQL-EXPLORE") {
+            Some(val) => match val.to_str() {
+                Ok(v) => {
+                    if v.to_string().to_lowercase() == "true" {
+                        true
+                    } else {
+                        false
+                    }
+                }
+                Err(e) => {
+                    error!("Could not parse explore header: {}", e);
+                    false
+                }
+            },
+            None => false,
+        };
+
         let query_state_holder = Arc::new(RwLock::new(StateHolder::new()));
         let query_state_holder = Arc::clone(&query_state_holder);
         // A web api to run against
@@ -224,7 +245,7 @@ impl Query {
 
                     // Translate the SQL AST into a `QueryParsing`
                     // that has all the elements needed to continue
-                    let parsed_queries = match query_c.process_sql(&access_token, ast) {
+                    let parsed_queries = match query_c.process_sql(&access_token, ast, explore_query) {
                         Ok(v) => v,
                         Err(e) => {
                             return match e {
@@ -278,30 +299,37 @@ impl Query {
                             // For each datastore in the log we are going to spawn a task to read the
                             // logs stored in given datastore.
                             for i in 0..logs_ds_len {
-                                let cfg2 = Arc::clone(&cfg);
-                                let query_state_holder2 = Arc::clone(&query_state_holder);
-                                let tx = tx.clone();
-                                // Task that will read all the logs for a given datastore
-                                let task = stream::iter_ok(i..i + 1)
-                                    .map(move |log_ds_index| {
-                                        let cfg2 = Arc::clone(&cfg2);
-                                        let query_state_holder2 = Arc::clone(&query_state_holder2);
-                                        // let log_ds_index = log_ds_index.clone();
-                                        Query::read_logs_from_datastore(
-                                            cfg2,
-                                            query_state_holder2,
-                                            query_index,
-                                            log_ds_index,
-                                        )
-                                    })
-                                    .flatten()
-                                    .fold(tx, |tx, lines| {
-                                        tx.send(lines)
-                                            .map_err(|e| QueryError::Underlying(format!("{:?}", e)))
-                                    })
-                                    .map_err(|_| ())
-                                    .map(|_| ());
-                                tokio::spawn(task);
+                                let ds_name = &log_datastores[i];
+                                if cfg_read.datastore.contains_key(ds_name) {
+                                    let cfg2 = Arc::clone(&cfg);
+                                    let query_state_holder2 = Arc::clone(&query_state_holder);
+                                    let tx = tx.clone();
+                                    // Task that will read all the logs for a given datastore
+                                    let task = stream::iter_ok(i..i + 1)
+                                        .map(move |log_ds_index| {
+                                            let cfg2 = Arc::clone(&cfg2);
+                                            let query_state_holder2 =
+                                                Arc::clone(&query_state_holder2);
+                                            // let log_ds_index = log_ds_index.clone();
+                                            Query::read_logs_from_datastore(
+                                                cfg2,
+                                                query_state_holder2,
+                                                query_index,
+                                                log_ds_index,
+                                            )
+                                        })
+                                        .flatten()
+                                        .fold(tx, |tx, lines| {
+                                            tx.send(lines).map_err(|e| {
+                                                QueryError::Underlying(format!("{:?}", e))
+                                            })
+                                        })
+                                        .map_err(|_| ())
+                                        .map(|_| ());
+                                    tokio::spawn(task);
+                                } else {
+                                    error!("Log `{:?}` references datastore `{}` which is not present in the configuration.", &log.name, &ds_name);
+                                }
                             }
 
                             rx.map_err(|e| QueryError::Underlying(format!("{:?}", e))) //temporarely remove error, we need to adress this
@@ -329,11 +357,12 @@ impl Query {
                                                 drop(ls);
 
                                                 q_parse.hs_db = Some(db);
-                                                drop(write_state_holder);
                                                 pattern_match_results
                                             }
                                             None => Arc::new(RwLock::new(HashMap::new())),
                                         };
+                                    // Drop the write lock
+                                    drop(write_state_holder);
 
                                     // lets process the results
 
@@ -356,6 +385,7 @@ impl Query {
                                             )
                                         })
                                         .collect::<Vec<String>>();
+                                    drop(read_state_holder);
 
                                     res
                                 })
@@ -372,6 +402,7 @@ impl Query {
         &self,
         access_token: &String,
         query: Statement,
+        explore_data: bool,
     ) -> Result<(Statement, QueryParsing), ProcessingQueryError> {
         // find the table they want to query
         let some_table = match query {
@@ -516,6 +547,11 @@ impl Query {
                 scan_flags = scan_flags | flag;
             }
         }
+        // if we are reading and exploring all, turn all flags on
+        if read_all && explore_data {
+            //            scan_flags = scan_flags.all();
+            scan_flags = constants::ScanFlags::all();
+        }
 
         let hs_db: Option<BlockDatabase> = build_hs_db(&scan_flags);
 
@@ -531,6 +567,7 @@ impl Query {
                 projections_ordered,
                 limit,
                 hs_db,
+                explore_data,
             },
         ))
     }
@@ -541,9 +578,10 @@ impl Query {
         &self,
         access_token: &String,
         ast: Vec<Statement>,
+        explore_data: bool,
     ) -> Result<Vec<(Statement, QueryParsing)>, ProcessingQueryError> {
         ast.into_iter()
-            .map(|q| self.process_statement(&access_token, q))
+            .map(|q| self.process_statement(&access_token, q, explore_data))
             .collect()
     }
 
@@ -571,7 +609,7 @@ impl Query {
             .name
             .clone()
             .unwrap();
-        // validation should make this unwrapping safe
+        // If the log has a reference to an invalid datastore panic out.
         let ds = cfg_read.datastore.get(ds_name.as_str()).unwrap();
         let cfg2 = Arc::clone(&cfg);
         let query_state_holder2 = Arc::clone(&query_state_holder);
@@ -683,8 +721,14 @@ fn process_fields_for_ast(
     }
 }
 
+#[derive(Debug)]
+pub enum PatternValue {
+    LineData(HSPatternMatch),
+    RichData(String),
+}
+
 pub fn extract_positional_fields(
-    projection_values: &mut HashMap<String, Option<String>>,
+    projection_values: &mut HashMap<String, Option<PatternValue>>,
     query_data: &QueryParsing,
     line: &String,
 ) {
@@ -694,7 +738,12 @@ pub fn extract_positional_fields(
         for pos in &query_data.positional_fields {
             let key = pos.alias.clone();
             if pos.position - 1 < (parts.len() as i32) {
-                projection_values.insert(key, Some(parts[(pos.position - 1) as usize].to_string()));
+                projection_values.insert(
+                    key,
+                    Some(PatternValue::RichData(
+                        parts[(pos.position - 1) as usize].to_string(),
+                    )),
+                );
             } else {
                 projection_values.insert(key, None);
             }
@@ -703,120 +752,165 @@ pub fn extract_positional_fields(
 }
 
 pub fn extract_smart_fields(
-    projection_values: &mut HashMap<String, Option<String>>,
+    projection_values: &mut HashMap<String, Option<PatternValue>>,
     query_data: &QueryParsing,
     line: &String,
-    pattern_match_results: HSPatternMatchResults,
-    line_number: usize,
+    found_vals: &HashMap<String, Vec<Option<HSPatternMatch>>>,
 ) {
     if query_data.smart_fields.len() > 0 {
         // Use HS patterns in line if a HSPatternMatchResults is passed
-        let found_vals = found_patterns_in_line(
-            pattern_match_results,
-            &(line_number as u16),
-            query_data,
-            &line,
-        );
         for smt in &query_data.smart_fields {
-            if found_vals.contains_key(&smt.typed[..]) {
-                // if the requested position is available
-                let key = smt.alias.clone();
-                if smt.position - 1 < (found_vals[&smt.typed].len() as i32) {
-                    let value = found_vals[&smt.typed][(smt.position - 1) as usize].clone();
-                    // match on subfield usage and validity of the subfield
-                    match (
-                        &smt.typed[..],
-                        &smt.subfield.as_ref().map_or(None, |m| Some(m.as_str())),
-                    ) {
-                        (SF_USER_AGENT, Some("name")) => {
-                            // TODO: Cache this parsing
-                            let parser = woothee::parser::Parser::new();
-                            match parser.parse(&value[..]) {
-                                Some(r) => {
-                                    projection_values.insert(key, Some(r.name.to_string()));
+            let key = smt.alias.clone();
+            match found_vals.get(&smt.typed[..]) {
+                Some(type_values) => {
+                    match type_values.get((smt.position - 1) as usize) {
+                        Some(proj_val) => {
+                            // TODO: if the projection is used only once in the smart field projections
+                            // we can rather take to avoid this allocation
+                            let value = proj_val.clone().unwrap();
+                            // match on subfield usage and validity of the subfield
+                            match (
+                                &smt.typed[..],
+                                &smt.subfield.as_ref().map_or(None, |m| Some(m.as_str())),
+                            ) {
+                                (SF_USER_AGENT, Some("name")) => {
+                                    // TODO: Cache this parsing
+                                    let parser = woothee::parser::Parser::new();
+                                    match parser
+                                        .parse(&line[value.from as usize..value.to as usize])
+                                    {
+                                        Some(r) => {
+                                            projection_values.insert(
+                                                key,
+                                                Some(PatternValue::RichData(r.name.to_string())),
+                                            );
+                                        }
+                                        None => {
+                                            projection_values.insert(key, None);
+                                        }
+                                    }
                                 }
-                                None => {
-                                    projection_values.insert(key, None);
+                                (SF_USER_AGENT, Some("category")) => {
+                                    // TODO: Cache this parsing
+                                    let parser = woothee::parser::Parser::new();
+                                    match parser
+                                        .parse(&line[value.from as usize..value.to as usize])
+                                    {
+                                        Some(r) => {
+                                            projection_values.insert(
+                                                key,
+                                                Some(PatternValue::RichData(
+                                                    r.category.to_string(),
+                                                )),
+                                            );
+                                        }
+                                        None => {
+                                            projection_values.insert(key, None);
+                                        }
+                                    }
+                                }
+                                (SF_USER_AGENT, Some("browser_type")) => {
+                                    // TODO: Cache this parsing
+                                    let parser = woothee::parser::Parser::new();
+                                    match parser
+                                        .parse(&line[value.from as usize..value.to as usize])
+                                    {
+                                        Some(r) => {
+                                            projection_values.insert(
+                                                key,
+                                                Some(PatternValue::RichData(
+                                                    r.browser_type.to_string(),
+                                                )),
+                                            );
+                                        }
+                                        None => {
+                                            projection_values.insert(key, None);
+                                        }
+                                    }
+                                }
+                                (SF_USER_AGENT, Some("os")) => {
+                                    // TODO: Cache this parsing
+                                    let parser = woothee::parser::Parser::new();
+                                    match parser
+                                        .parse(&line[value.from as usize..value.to as usize])
+                                    {
+                                        Some(r) => {
+                                            projection_values.insert(
+                                                key,
+                                                Some(PatternValue::RichData(r.os.to_string())),
+                                            );
+                                        }
+                                        None => {
+                                            projection_values.insert(key, None);
+                                        }
+                                    }
+                                }
+                                (SF_USER_AGENT, Some("os_version")) => {
+                                    // TODO: Cache this parsing
+                                    let parser = woothee::parser::Parser::new();
+                                    match parser
+                                        .parse(&line[value.from as usize..value.to as usize])
+                                    {
+                                        Some(r) => {
+                                            projection_values.insert(
+                                                key,
+                                                Some(PatternValue::RichData(
+                                                    r.os_version.to_string(),
+                                                )),
+                                            );
+                                        }
+                                        None => {
+                                            projection_values.insert(key, None);
+                                        }
+                                    }
+                                }
+                                (SF_USER_AGENT, Some("version")) => {
+                                    // TODO: Cache this parsing
+                                    let parser = woothee::parser::Parser::new();
+                                    match parser
+                                        .parse(&line[value.from as usize..value.to as usize])
+                                    {
+                                        Some(r) => {
+                                            projection_values.insert(
+                                                key,
+                                                Some(PatternValue::RichData(r.version.to_string())),
+                                            );
+                                        }
+                                        None => {
+                                            projection_values.insert(key, None);
+                                        }
+                                    }
+                                }
+                                (SF_USER_AGENT, Some("vendor")) => {
+                                    // TODO: Cache this parsing
+                                    let parser = woothee::parser::Parser::new();
+                                    match parser
+                                        .parse(&line[value.from as usize..value.to as usize])
+                                    {
+                                        Some(r) => {
+                                            projection_values.insert(
+                                                key,
+                                                Some(PatternValue::RichData(r.vendor.to_string())),
+                                            );
+                                        }
+                                        None => {
+                                            projection_values.insert(key, None);
+                                        }
+                                    }
+                                }
+                                (_, _) => {
+                                    projection_values
+                                        .insert(key, Some(PatternValue::LineData(value)));
                                 }
                             }
                         }
-                        (SF_USER_AGENT, Some("category")) => {
-                            // TODO: Cache this parsing
-                            let parser = woothee::parser::Parser::new();
-                            match parser.parse(&value[..]) {
-                                Some(r) => {
-                                    projection_values.insert(key, Some(r.category.to_string()));
-                                }
-                                None => {
-                                    projection_values.insert(key, None);
-                                }
-                            }
-                        }
-                        (SF_USER_AGENT, Some("browser_type")) => {
-                            // TODO: Cache this parsing
-                            let parser = woothee::parser::Parser::new();
-                            match parser.parse(&value[..]) {
-                                Some(r) => {
-                                    projection_values.insert(key, Some(r.browser_type.to_string()));
-                                }
-                                None => {
-                                    projection_values.insert(key, None);
-                                }
-                            }
-                        }
-                        (SF_USER_AGENT, Some("os")) => {
-                            // TODO: Cache this parsing
-                            let parser = woothee::parser::Parser::new();
-                            match parser.parse(&value[..]) {
-                                Some(r) => {
-                                    projection_values.insert(key, Some(r.os.to_string()));
-                                }
-                                None => {
-                                    projection_values.insert(key, None);
-                                }
-                            }
-                        }
-                        (SF_USER_AGENT, Some("os_version")) => {
-                            // TODO: Cache this parsing
-                            let parser = woothee::parser::Parser::new();
-                            match parser.parse(&value[..]) {
-                                Some(r) => {
-                                    projection_values.insert(key, Some(r.os_version.to_string()));
-                                }
-                                None => {
-                                    projection_values.insert(key, None);
-                                }
-                            }
-                        }
-                        (SF_USER_AGENT, Some("version")) => {
-                            // TODO: Cache this parsing
-                            let parser = woothee::parser::Parser::new();
-                            match parser.parse(&value[..]) {
-                                Some(r) => {
-                                    projection_values.insert(key, Some(r.version.to_string()));
-                                }
-                                None => {
-                                    projection_values.insert(key, None);
-                                }
-                            }
-                        }
-                        (SF_USER_AGENT, Some("vendor")) => {
-                            // TODO: Cache this parsing
-                            let parser = woothee::parser::Parser::new();
-                            match parser.parse(&value[..]) {
-                                Some(r) => {
-                                    projection_values.insert(key, Some(r.vendor.to_string()));
-                                }
-                                None => {
-                                    projection_values.insert(key, None);
-                                }
-                            }
-                        }
-                        (_, _) => {
-                            projection_values.insert(key, Some(value));
+                        None => {
+                            projection_values.insert(key, None);
                         }
                     }
-                } else {
+                }
+                None => {
+                    // insert none
                     projection_values.insert(key, None);
                 }
             }
@@ -825,30 +919,50 @@ pub fn extract_smart_fields(
 }
 
 /// Builds the resulting line output, this function will consume the projection values map
-fn mk_output_line(
-    mut projection_values: HashMap<String, Option<String>>,
+fn make_output(
+    mut projection_values: HashMap<String, Option<PatternValue>>,
     query_data: &QueryParsing,
     line: String,
+    found_vals: HashMap<String, Vec<Option<HSPatternMatch>>>,
 ) -> Option<String> {
     if query_data.read_all {
-        let output_obj = json!({
-        "$line": line,
-        });
-        let outstring = serde_json::to_string(&output_obj).unwrap();
-        Some(outstring)
+        // if we are doing extras
+        if query_data.explore_data {
+            let extras = build_meta_extras(found_vals);
+            let output_obj = json!({
+            "$line": line,
+            "_meta": extras,
+            });
+            let outstring = serde_json::to_string(&output_obj).unwrap();
+            Some(outstring)
+        } else {
+            let output_obj = json!({
+            "$line": line,
+            });
+            let outstring = serde_json::to_string(&output_obj).unwrap();
+            Some(outstring)
+        }
     } else {
-        // build the result iterate over the ordered resulting
-        // projections
-        //        let mut field_values: Vec<&Option<String>> = Vec::new();
+        // build the result iterate over the ordered resulting projections
         let mut mappy: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
         for i in 0..query_data.projections_ordered.len() {
             let proj = &query_data.projections_ordered[i];
             if projection_values.contains_key(proj) {
                 if let Some(v) = projection_values.remove(proj) {
                     match v {
-                        Some(val) => {
-                            mappy.insert(proj.to_string(), serde_json::Value::String(val));
-                        }
+                        Some(val) => match val {
+                            PatternValue::RichData(s) => {
+                                mappy.insert(proj.to_string(), serde_json::Value::String(s));
+                            }
+                            PatternValue::LineData(ld) => {
+                                mappy.insert(
+                                    proj.to_string(),
+                                    serde_json::Value::String(
+                                        line[ld.from as usize..ld.to as usize].to_string(),
+                                    ),
+                                );
+                            }
+                        },
                         None => {
                             mappy.insert(proj.to_string(), serde_json::Value::Null);
                         }
@@ -864,6 +978,18 @@ fn mk_output_line(
     }
 }
 
+#[derive(PartialEq, Debug, Clone)]
+pub enum PatternType {
+    Email,
+    IP,
+    Phone,
+    Date,
+    Quoted,
+    Url,
+    UserAgent,
+    Unknown,
+}
+
 fn evaluate_query_on_line(
     query: &Statement,
     query_data: &QueryParsing,
@@ -871,17 +997,12 @@ fn evaluate_query_on_line(
     line: String,
     pattern_match_results: HSPatternMatchResults,
 ) -> Option<String> {
-    let mut projection_values: HashMap<String, Option<String>> = HashMap::new();
+    let mut projection_values: HashMap<String, Option<PatternValue>> = HashMap::new();
+    let found_vals =
+        found_patterns_in_line(pattern_match_results, &(line_index as u16), query_data);
 
     extract_positional_fields(&mut projection_values, query_data, &line);
-
-    extract_smart_fields(
-        &mut projection_values,
-        query_data,
-        &line,
-        pattern_match_results,
-        line_index,
-    );
+    extract_smart_fields(&mut projection_values, query_data, &line, &found_vals);
 
     // we can skip the line all together if we gonna project an empty line
     if query_data.read_all == false {
@@ -906,7 +1027,7 @@ fn evaluate_query_on_line(
     // filter the line
     let skip_line = line_fails_query_conditions(&line, &query, &projection_values);
     if !skip_line {
-        mk_output_line(projection_values, query_data, line)
+        make_output(projection_values, query_data, line, found_vals)
     } else {
         None
     }
@@ -924,6 +1045,7 @@ pub struct QueryParsing {
     projections_ordered: Vec<String>,
     limit: Option<u64>,
     pub hs_db: Option<BlockDatabase>,
+    explore_data: bool,
 }
 
 #[derive(Debug)]
@@ -1011,6 +1133,34 @@ fn detect_field_for_ast(ast: &Expr) -> FieldFound {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct ExtraPattern {
+    from: u64,
+    to: u64,
+}
+
+fn build_meta_extras(
+    found_vals: HashMap<String, Vec<Option<HSPatternMatch>>>,
+) -> HashMap<String, Vec<ExtraPattern>> {
+    let mut mappy: HashMap<String, Vec<ExtraPattern>> = HashMap::new();
+    for (key, patterns) in found_vals.into_iter() {
+        if patterns.len() > 0 {
+            let mut vpats: Vec<ExtraPattern> = Vec::new();
+            for opt_pattern in patterns {
+                match opt_pattern {
+                    Some(pattern) => vpats.push(ExtraPattern {
+                        from: pattern.from,
+                        to: pattern.to,
+                    }),
+                    None => {}
+                }
+            }
+            mappy.insert(key.to_string(), vpats);
+        }
+    }
+    mappy
+}
+
 #[cfg(test)]
 mod query_tests {
     use crate::config::{Config, Log, LogAuth, Server, Token};
@@ -1086,7 +1236,7 @@ mod query_tests {
 
         let query = "SELECT * FROM mylog".to_string();
         let ast = query_c.parse_query(query).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, ast);
+        let queries_parse = query_c.process_sql(&access_token, ast, false);
 
         match queries_parse {
             Ok(pq) => {
@@ -1108,7 +1258,7 @@ mod query_tests {
 
         let query = "SELECT * FROM mylog LIMIT 10".to_string();
         let ast = query_c.parse_query(query.clone()).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, ast);
+        let queries_parse = query_c.process_sql(&access_token, ast, false);
 
         match queries_parse {
             Ok(pq) => {
@@ -1134,7 +1284,7 @@ mod query_tests {
 
         let query = "SELECT $1, $4 FROM mylog".to_string();
         let ast = query_c.parse_query(query.clone()).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, ast);
+        let queries_parse = query_c.process_sql(&access_token, ast, false);
 
         match queries_parse {
             Ok(pq) => {
@@ -1168,7 +1318,7 @@ mod query_tests {
 
         let query = "SELECT $1, $4 FROM mylog LIMIT 10".to_string();
         let ast = query_c.parse_query(query.clone()).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, ast);
+        let queries_parse = query_c.process_sql(&access_token, ast, false);
 
         match queries_parse {
             Ok(pq) => {
@@ -1211,7 +1361,7 @@ mod query_tests {
 
         let query = "SELECT $ip, $email FROM mylog LIMIT 10".to_string();
         let ast = query_c.parse_query(query.clone()).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, ast);
+        let queries_parse = query_c.process_sql(&access_token, ast, false);
 
         match queries_parse {
             Ok(pq) => {
@@ -1263,7 +1413,7 @@ mod query_tests {
 
         let query = "SELECT $2, $ip, $email FROM mylog LIMIT 10".to_string();
         let ast = query_c.parse_query(query.clone()).unwrap();
-        let queries_parse = query_c.process_sql(&access_token, ast);
+        let queries_parse = query_c.process_sql(&access_token, ast, false);
 
         match queries_parse {
             Ok(pq) => {
@@ -1333,7 +1483,7 @@ mod query_tests {
 
         let query = "SELECT * FROM mylog".to_string();
         let ast = query_c.parse_query(query.clone()).unwrap();
-        let queries_parse = query_c.process_sql(&provided_access_token, ast);
+        let queries_parse = query_c.process_sql(&provided_access_token, ast, false);
 
         match queries_parse {
             Ok(pq) => {
@@ -1359,7 +1509,7 @@ mod query_tests {
 
         let query = "SELECT * FROM incorrect_log".to_string();
         let ast = query_c.parse_query(query.clone()).unwrap();
-        let queries_parse = query_c.process_sql(&provided_access_token, ast);
+        let queries_parse = query_c.process_sql(&provided_access_token, ast, false);
 
         match queries_parse {
             Ok(pq) => {
@@ -1407,7 +1557,7 @@ mod query_tests {
         let query = tc.query;
         let ast = query_c.parse_query(query.clone()).unwrap();
 
-        let mut queries_parse = query_c.process_sql(&access_token, ast).unwrap();
+        let mut queries_parse = query_c.process_sql(&access_token, ast, false).unwrap();
 
         let log_line = tc.log_line;
         let lines: Vec<String> = vec![log_line.clone()];
