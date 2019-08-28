@@ -80,6 +80,7 @@ impl MinSQL {
     }
 
     pub fn run(&self) {
+        info!("Starting MinSQL");
         // make sure all datastores shown are reachable
         let cfg_valid_ds = Arc::clone(&self.config);
         self.validate_datastore_reachability(cfg_valid_ds);

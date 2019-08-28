@@ -93,6 +93,8 @@ impl Meta {
                                 .unwrap_or(vec![])
                                 .into_iter()
                                 .map(|x| x.key.unwrap())
+                                // Avoid loading models
+                                .filter(|file_key| file_key.contains("/models/") == false)
                                 .collect();
 
                             (objs, list_objects.next_marker)
@@ -127,7 +129,13 @@ impl Meta {
                             ()
                         })
                         .map(move |bytes| {
-                            let result = String::from_utf8(bytes.to_vec()).unwrap();
+                            let result = match String::from_utf8(bytes.to_vec()) {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    println!("error!{:?}", e);
+                                    return MetaConfigObject::Unknown;
+                                }
+                            };
                             let parts: Vec<&str> = file_key_clone
                                 .trim_start_matches("minsql/meta/")
                                 .split("/")

@@ -16,13 +16,14 @@
 
 use std::collections::HashMap;
 
+use crate::query::PatternValue;
 use log::info;
 use sqlparser::ast::{BinaryOperator, Expr, SetExpr, Statement, Value};
 
 pub fn line_fails_query_conditions(
     line: &String,
     query: &Statement,
-    projection_values: &HashMap<String, Option<String>>,
+    projection_values: &HashMap<String, Option<PatternValue>>,
 ) -> bool {
     if let Statement::Query(ref q) = query {
         if let SetExpr::Select(ref select) = q.body {
@@ -40,7 +41,7 @@ pub fn line_fails_query_conditions(
 /// whether the line passes the conditions or fails them.
 pub fn evaluate(
     ast_node: &Expr,
-    projection_values: &HashMap<String, Option<String>>,
+    projection_values: &HashMap<String, Option<PatternValue>>,
     line: &String,
 ) -> bool {
     match ast_node {
@@ -113,7 +114,14 @@ pub fn evaluate(
                     };
 
                     if let Some(ref s) = projection_values.get(&identifier).unwrap() {
-                        return s == &op_value;
+                        match s {
+                            PatternValue::LineData(ld) => {
+                                return &line[ld.from as usize..ld.to as usize] == &op_value;
+                            }
+                            PatternValue::RichData(rd) => {
+                                return rd == &op_value;
+                            }
+                        }
                     } else {
                         return false;
                     }
@@ -141,7 +149,14 @@ pub fn evaluate(
                         _ => "".to_string(),
                     };
                     if let Some(ref s) = projection_values.get(&identifier).unwrap() {
-                        return s != &op_value;
+                        match s {
+                            PatternValue::LineData(ld) => {
+                                return &line[ld.from as usize..ld.to as usize] != &op_value;
+                            }
+                            PatternValue::RichData(rd) => {
+                                return rd != &op_value;
+                            }
+                        }
                     } else {
                         return false;
                     }
@@ -173,7 +188,15 @@ pub fn evaluate(
                         return line.contains(&op_value[..]);
                     } else {
                         if let Some(ref s) = projection_values.get(&identifier).unwrap() {
-                            return s.contains(&op_value);
+                            match s {
+                                PatternValue::LineData(ld) => {
+                                    return line[ld.from as usize..ld.to as usize]
+                                        .contains(&op_value);
+                                }
+                                PatternValue::RichData(rd) => {
+                                    return rd.contains(&op_value);
+                                }
+                            }
                         } else {
                             return false;
                         }
@@ -206,7 +229,15 @@ pub fn evaluate(
                         return !line.contains(&op_value[..]);
                     } else {
                         if let Some(ref s) = projection_values.get(&identifier).unwrap() {
-                            return !s.contains(&op_value);
+                            match s {
+                                PatternValue::LineData(ld) => {
+                                    return !line[ld.from as usize..ld.to as usize]
+                                        .contains(&op_value);
+                                }
+                                PatternValue::RichData(rd) => {
+                                    return !rd.contains(&op_value);
+                                }
+                            }
                         } else {
                             return false;
                         }
@@ -242,7 +273,7 @@ mod filter_tests {
     use crate::query::{extract_positional_fields, extract_smart_fields, Query};
 
     use super::*;
-    use crate::hyperscan::{HSLineScanner, HSPatternMatchResults};
+    use crate::hyperscan::{found_patterns_in_line, HSLineScanner, HSPatternMatchResults};
 
     // Generates a Config object with only one auth item for one log
     fn get_ds_log_auth_config_for(log_name: String, token: &String) -> Config {
@@ -291,7 +322,7 @@ mod filter_tests {
     fn setup_select(
         query_stmt: String,
         line: &String,
-    ) -> (Statement, HashMap<String, Option<String>>) {
+    ) -> (Statement, HashMap<String, Option<PatternValue>>) {
         let access_token = "TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1TOKEN1".to_string();
 
         let cfg = get_ds_log_auth_config_for("mylog".to_string(), &access_token);
@@ -299,10 +330,10 @@ mod filter_tests {
         let query_c = Query::new(cfg);
 
         let qparse = query_c.parse_query(query_stmt).unwrap();
-        let mut qparsing = query_c.process_sql(&access_token, qparse).unwrap();
+        let mut qparsing = query_c.process_sql(&access_token, qparse, false).unwrap();
         let (ref query, ref mut query_data) = *qparsing.get_mut(0).unwrap();
         //        let mut query_data = &qparsing.get_mut(0).unwrap().1;
-        let mut projection_values: HashMap<String, Option<String>> = HashMap::new();
+        let mut projection_values: HashMap<String, Option<PatternValue>> = HashMap::new();
         // scan
         let lines: Vec<String> = vec![line.clone()];
         let pattern_match_results: HSPatternMatchResults = match query_data.hs_db.take() {
@@ -320,15 +351,10 @@ mod filter_tests {
             }
             None => Arc::new(RwLock::new(HashMap::new())),
         };
+        let found_vals = found_patterns_in_line(pattern_match_results, &0, query_data);
         // Extract projections
         extract_positional_fields(&mut projection_values, query_data, &line);
-        extract_smart_fields(
-            &mut projection_values,
-            query_data,
-            &line,
-            pattern_match_results,
-            0,
-        );
+        extract_smart_fields(&mut projection_values, query_data, &line, &found_vals);
         println!("{:?}", projection_values);
         return (query.clone(), projection_values);
     }

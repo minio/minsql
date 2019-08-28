@@ -1,6 +1,6 @@
 use crate::constants;
 use crate::constants::{SF_DATE, SF_EMAIL, SF_IP, SF_PHONE, SF_QUOTED, SF_URL, SF_USER_AGENT};
-use crate::query::QueryParsing;
+use crate::query::{PatternType, QueryParsing};
 use hyperscan::*;
 use log::debug;
 use std::collections::HashMap;
@@ -21,6 +21,7 @@ pub fn build_hs_db(flags: &constants::ScanFlags) -> Option<BlockDatabase> {
         (P_TEST, "test".to_string()),
         (P_EMAIL, "([\\w\\.!#$%&'*+\\-=?\\^_`{|}~]+@([\\w\\d-]+\\.)+[\\w]{2,4})".to_string()),
         (P_IP, "(((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))".to_string()),
+        // TODO: This Regex is not stopping on the first quote mark, probably collision algorithm is doing something odd
         (P_QUOTED, "((\"(.*?)\")|'(.*?)')".to_string()),
         (P_DATE, "((19[789]\\d|2\\d{3})[-/](0[1-9]|1[1-2])[-/](0[1-9]|[1-2][0-9]|3[0-1]*))|((0[1-9]|[1-2][0-9]|3[0-1]*)[-/](Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|(0[1-9]|1[1-2]))[-/](19[789]\\d|2\\d{3}))".to_string()),
         (P_PHONE, "[\\(]?(\\d{3})[\\)-]?[- ]?(\\d{3})[- ]?(\\d{4})".to_string()),
@@ -88,8 +89,9 @@ pub fn build_hs_db(flags: &constants::ScanFlags) -> Option<BlockDatabase> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct HSPatternMatch {
-    pub pattern_id: u32,
+    pub pattern: PatternType,
     pub from: u64,
     pub to: u64,
 }
@@ -100,8 +102,7 @@ pub struct HSLineScanner<'a> {
     pub line_matches: HashMap<u16, HashMap<u16, Vec<HSPatternMatch>>>,
 }
 
-pub type HSPatternMatchResults =
-    Arc<RwLock<HashMap<u16, RwLock<HashMap<u16, Vec<HSPatternMatch>>>>>>;
+pub type HSPatternMatchResults = Arc<RwLock<HashMap<u16, Vec<HSPatternMatch>>>>;
 
 impl<'a> HSLineScanner<'a> {
     pub fn new(lines: &Vec<String>) -> HSLineScanner {
@@ -147,63 +148,115 @@ struct HSScanPair<'a> {
 }
 
 fn callback_block(id: u32, from: u64, to: u64, _flags: u32, context: &mut HSScanPair) -> u32 {
+    // figure out the pattern
+    let pattern_type = match id as usize {
+        P_IP => PatternType::IP,
+        P_EMAIL => PatternType::Email,
+        P_DATE => PatternType::Date,
+        P_QUOTED => PatternType::Quoted,
+        P_URL => PatternType::Url,
+        P_PHONE => PatternType::Phone,
+        P_USER_AGENT => PatternType::UserAgent,
+        _ => PatternType::Unknown,
+    };
+
     //  Get the patterns matched for this line, else insert new map
     let mut line_map = context.pattern_match_results.write().unwrap();
 
     if line_map.contains_key(&context.line_index) == false {
-        line_map.insert(context.line_index.clone(), RwLock::new(HashMap::new()));
+        line_map.insert(context.line_index.clone(), Vec::new());
     }
 
-    let mut line_patterns = line_map
-        .get_mut(&context.line_index)
-        .unwrap()
-        .write()
-        .unwrap();
-
-    if line_patterns.contains_key(&(id as u16)) == false {
-        line_patterns.insert(id.clone() as u16, Vec::new());
-    }
-
-    let pattern_matches = line_patterns.get_mut(&(id as u16)).unwrap();
-
+    let line_patterns = line_map.get_mut(&context.line_index).unwrap();
     // Get the matches for this pattern within the line
 
     // if this is the first match, insert
-    if pattern_matches.len() == 0 {
-        pattern_matches.push(HSPatternMatch {
-            pattern_id: id,
+    if line_patterns.len() == 0 {
+        line_patterns.push(HSPatternMatch {
+            pattern: pattern_type,
             from: from,
             to: to,
         });
     } else {
-        // else compare to previous matches to make sure we only keep the longest
-        let mut collision = false;
-        for i in 0..pattern_matches.len() {
-            // if we have another pattern starting in the same spot, we probably have an overlap
-            // keep the longest
-            if pattern_matches[i].from == from && pattern_matches[i].to < to {
-                collision = true;
-                pattern_matches[i] = HSPatternMatch {
-                    pattern_id: id,
-                    from: from,
-                    to: to,
-                };
+        // handle the special case for quoted overlaps
+        match pattern_type {
+            PatternType::Quoted => {
+                // else compare to previous matches to make sure we only keep the longest
+                let mut collision = false;
+                let mut collision_index: usize = 0;
+                let mut found_quoted_pattern = false;
+                // find the self referencing quote, or determine no quote has been detected before
+                for i in 0..line_patterns.len() {
+                    if line_patterns[i].pattern == pattern_type {
+                        found_quoted_pattern = true;
+                        if line_patterns[i].from == line_patterns[i].to {
+                            collision = true;
+                            collision_index = i;
+                        }
+                    }
+                }
+                if found_quoted_pattern == false {
+                    // no collision, let's mark this as self reference and hope for next match
+                    line_patterns.push(HSPatternMatch {
+                        pattern: pattern_type,
+                        from: from,
+                        to: to,
+                    });
+                } else if collision == true {
+                    let old_from = line_patterns[collision_index].from - 1;
+                    line_patterns[collision_index] = HSPatternMatch {
+                        pattern: pattern_type,
+                        from: old_from,
+                        to: to,
+                    };
+                } else {
+                    // no collision, let's mark this as self reference and hope for next match
+                    line_patterns.push(HSPatternMatch {
+                        pattern: pattern_type,
+                        from: to,
+                        to: to,
+                    });
+                }
             }
-        }
-        if collision == false {
-            pattern_matches.push(HSPatternMatch {
-                pattern_id: id,
-                from: from,
-                to: to,
-            });
+            _ => {
+                // else compare to previous matches to make sure we only keep the longest
+                let mut collision = false;
+                let mut collision_index: usize = 0;
+                for i in 0..line_patterns.len() {
+                    // if we have another pattern starting in the same spot, we probably have an overlap
+                    // keep the longest
+                    if line_patterns[i].pattern == pattern_type
+                        && line_patterns[i].from == from
+                        && line_patterns[i].to < to
+                    {
+                        collision = true;
+                        collision_index = i;
+                    }
+                }
+                if collision == true {
+                    line_patterns[collision_index] = HSPatternMatch {
+                        pattern: pattern_type,
+                        from: from,
+                        to: to,
+                    };
+                } else {
+                    line_patterns.push(HSPatternMatch {
+                        pattern: pattern_type,
+                        from: from,
+                        to: to,
+                    });
+                }
+            }
         }
     }
 
     0
 }
 
-pub fn alloc_result_map(flags: &constants::ScanFlags) -> HashMap<String, Vec<String>> {
-    let mut results: HashMap<String, Vec<String>> = HashMap::new();
+pub fn alloc_result_map(
+    flags: &constants::ScanFlags,
+) -> HashMap<String, Vec<Option<HSPatternMatch>>> {
+    let mut results: HashMap<String, Vec<Option<HSPatternMatch>>> = HashMap::new();
 
     if flags.contains(constants::ScanFlags::IP) {
         results.insert(SF_IP.to_string(), Vec::new());
@@ -233,65 +286,53 @@ pub fn found_patterns_in_line(
     pattern_match_results: HSPatternMatchResults,
     line_index: &u16,
     query_data: &QueryParsing,
-    line: &String,
-) -> HashMap<String, Vec<String>> {
+) -> HashMap<String, Vec<Option<HSPatternMatch>>> {
     // Retain only the lines with matches
-    let read_match_hold = pattern_match_results.read().unwrap();
-    let mut found_vals: HashMap<String, Vec<String>> = alloc_result_map(&query_data.scan_flags);
+    let mut read_match_hold = pattern_match_results.write().unwrap();
+    let mut found_vals: HashMap<String, Vec<Option<HSPatternMatch>>> =
+        alloc_result_map(&query_data.scan_flags);
     // only the lines reported in pattern_match_results have the desired projections
     if read_match_hold.contains_key(line_index) {
-        let patterns = read_match_hold.get(line_index).unwrap();
+        let patterns = read_match_hold.remove(line_index).unwrap();
 
-        let patterns_data = patterns.read().unwrap();
-
-        for (pat_id, datum) in &*patterns_data {
-            for pm in datum {
-                match *pat_id as usize {
-                    P_IP => {
-                        println!("found IP!");
-                        found_vals
-                            .get_mut(SF_IP)
-                            .unwrap()
-                            .push(line[pm.from as usize..pm.to as usize].to_string());
-                    }
-                    P_EMAIL => {
-                        found_vals
-                            .get_mut(SF_EMAIL)
-                            .unwrap()
-                            .push(line[pm.from as usize..pm.to as usize].to_string());
-                    }
-                    P_DATE => {
-                        found_vals
-                            .get_mut(SF_DATE)
-                            .unwrap()
-                            .push(line[pm.from as usize..pm.to as usize].to_string());
-                    }
-                    P_QUOTED => {
-                        found_vals
-                            .get_mut(SF_QUOTED)
-                            .unwrap()
-                            .push(line[(pm.from + 1) as usize..(pm.to - 1) as usize].to_string());
-                    }
-                    P_URL => {
-                        found_vals
-                            .get_mut(SF_URL)
-                            .unwrap()
-                            .push(line[pm.from as usize..pm.to as usize].to_string());
-                    }
-                    P_PHONE => {
-                        found_vals
-                            .get_mut(SF_PHONE)
-                            .unwrap()
-                            .push(line[pm.from as usize..pm.to as usize].to_string());
-                    }
-                    P_USER_AGENT => {
-                        found_vals
-                            .get_mut(SF_USER_AGENT)
-                            .unwrap()
-                            .push(line[(pm.from + 1) as usize..(pm.to - 1) as usize].to_string());
-                    }
-                    _ => (),
+        for pat in patterns.into_iter() {
+            match &pat.pattern {
+                PatternType::IP => {
+                    found_vals.get_mut(SF_IP).unwrap().push(Some(pat));
                 }
+                PatternType::Email => {
+                    found_vals.get_mut(SF_EMAIL).unwrap().push(Some(pat));
+                }
+                PatternType::Date => {
+                    found_vals.get_mut(SF_DATE).unwrap().push(Some(pat));
+                }
+                PatternType::Quoted => {
+                    found_vals
+                        .get_mut(SF_QUOTED)
+                        .unwrap()
+                        .push(Some(HSPatternMatch {
+                            pattern: pat.pattern,
+                            from: pat.from + 1,
+                            to: pat.to - 1,
+                        }));
+                }
+                PatternType::Url => {
+                    found_vals.get_mut(SF_URL).unwrap().push(Some(pat));
+                }
+                PatternType::Phone => {
+                    found_vals.get_mut(SF_PHONE).unwrap().push(Some(pat));
+                }
+                PatternType::UserAgent => {
+                    found_vals
+                        .get_mut(SF_USER_AGENT)
+                        .unwrap()
+                        .push(Some(HSPatternMatch {
+                            pattern: pat.pattern,
+                            from: pat.from + 1,
+                            to: pat.to - 1,
+                        }));
+                }
+                _ => (),
             }
         }
     }
