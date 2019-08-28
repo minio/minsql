@@ -1633,5 +1633,4 @@ mod query_tests {
         };
         run_parse_and_match_case(tc);
     }
-
 }
