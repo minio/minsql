@@ -63,6 +63,7 @@ script:
 
 after_failure:
   - echo `pwd`
+  - tree -h
   - $LLVM_ROOT/bin/llvm-config --cxxflags --ldflags
 
 cache:
