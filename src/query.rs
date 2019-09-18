@@ -1205,6 +1205,7 @@ mod query_tests {
                 description: None,
                 is_admin: false,
                 enabled: true,
+                api_access: false,
             },
         );
 
