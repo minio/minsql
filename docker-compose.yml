@@ -30,6 +30,9 @@ services:
    MINSQL_METABUCKET_ENDPOINT: http://minio-engine:9000
    MINSQL_METABUCKET_ACCESS_KEY: minio
    MINSQL_METABUCKET_SECRET_KEY: minio123
+   MINSQL_ROOT_ACCESS_KEY: minsqlaccesskeyx
+   MINSQL_ROOT_SECRET_KEY: minsqlsecretkeypleasechangexxxx
+   RUST_LOG: info
 
 volumes:
   data:

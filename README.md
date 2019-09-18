@@ -27,8 +27,12 @@ export MINSQL_METABUCKET_NAME=minsql-meta
 export MINSQL_METABUCKET_ENDPOINT=http://localhost:9000
 export MINSQL_METABUCKET_ACCESS_KEY=minio
 export MINSQL_METABUCKET_SECRET_KEY=minio123
+export MINSQL_ROOT_ACCESS_KEY=minsqlaccesskeyx
+export MINSQL_ROOT_SECRET_KEY=minsqlsecretkeypleasechangexxxx
 ./minsql
 ```
+
+Then go to `http://127.0.0.0.1:9999/ui/` and login with the provided `MINSQL_ROOT_ACCESS_KEY` and  `MINSQL_ROOT_SECRET_KEY`. 
 
 ##### Docker
 Create the compose file
@@ -66,6 +70,8 @@ services:
    MINSQL_METABUCKET_ENDPOINT: http://minio-engine:9000
    MINSQL_ACCESS_KEY: minio
    MINSQL_SECRET_KEY: minio123
+   MINSQL_ROOT_ACCESS_KEY: minsqlaccesskeyx
+   MINSQL_ROOT_SECRET_KEY: minsqlsecretkeypleasechangexxxx
 
 volumes:
   data:
@@ -86,6 +92,8 @@ docker-compose up
 | MINSQL_METABUCKET_SECRET_KEY | Meta Bucket Secret key                            |
 | MINSQL_PKCS12_CERT           | *Optional:* location to a pkcs12 certificate.     |
 | MINSQL_PKCS12_PASSWORD       | *Optional:* password to unlock the certificate.   |
+| MINSQL_ROOT_ACCESS_KEY       | *Optional:* 16 digit access key to bootstrap minsql|
+| MINSQL_ROOT_SECRET_KEY       | *Optional:* 32 digit secret key to bootstrap minsql|
 
 ### Configuring
 

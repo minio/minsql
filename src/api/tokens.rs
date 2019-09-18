@@ -62,6 +62,7 @@ impl ApiTokens {
             description: None,
             is_admin: false,
             enabled: true,
+            api_access: false,
         };
 
         let token: serde_json::Value = match serde_json::from_str(&payload) {
@@ -194,7 +195,9 @@ impl ViewSet for ApiTokens {
         let cfg_read = self.config.read().unwrap();
         let mut tokens: Vec<Token> = Vec::new();
         for (_, token) in &cfg_read.tokens {
-            tokens.push(token.clone());
+            if token.api_access {
+                tokens.push(token.clone());
+            }
         }
         // sort
         tokens.sort_by(|a, b| a.access_key.cmp(&b.access_key));
