@@ -267,7 +267,7 @@ pub fn load_configuration() -> Result<Config, ConfigurationError> {
         Err(_) => None,
     };
     // if both are provided
-    if root_username.is_none() == false && root_password.is_none() == false {
+    if root_username.is_some() && root_password.is_some() {
         configuration.tokens.insert(
             root_username.clone().unwrap(),
             Token {
