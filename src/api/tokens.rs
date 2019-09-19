@@ -193,17 +193,12 @@ impl ApiTokens {
 impl ViewSet for ApiTokens {
     fn list(&self, req: Request<Body>) -> ResponseFuture {
         let cfg_read = self.config.read().unwrap();
-        let mut tokens: Vec<Token> = Vec::new();
-        let mut tokens = cfg_read 
-                   .tokens
-                   .values()
-                   .filter(|token| token.api_access)
-                   .map(|token| token.clone()) 
-                   .collect::<Vec<Token>>();
-            if token.api_access {
-                tokens.push(token.clone());
-            }
-        }
+        let mut tokens = cfg_read
+            .tokens
+            .values()
+            .filter(|token| token.api_access)
+            .map(|token| token.clone())
+            .collect::<Vec<Token>>();
         // sort
         tokens.sort_by(|a, b| a.access_key.cmp(&b.access_key));
         // paginate
