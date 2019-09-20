@@ -18,11 +18,11 @@ use std::collections::HashMap;
 use std::env;
 use std::fmt;
 
+use clap::{App, Arg};
 use log::error;
 use serde_derive::{Deserialize, Serialize};
 
 use crate::constants::DEFAULT_SERVER_ADDRESS;
-use clap::{App, Arg};
 
 // environment variables
 pub const METABUCKET_ENDPOINT: &str = "MINSQL_METABUCKET_ENDPOINT";
@@ -31,6 +31,8 @@ pub const METABUCKET_ACCESS_KEY: &str = "MINSQL_METABUCKET_ACCESS_KEY";
 pub const METABUCKET_SECRET_KEY: &str = "MINSQL_METABUCKET_SECRET_KEY";
 pub const PKCS12_CERT: &str = "MINSQL_PKCS12_CERT";
 pub const PKCS12_PASSWORD: &str = "MINSQL_PKCS12_PASSWORD";
+pub const ROOT_ACCESS_KEY: &str = "MINSQL_ROOT_ACCESS_KEY";
+pub const ROOT_SECRET_KEY: &str = "MINSQL_ROOT_SECRET_KEY";
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -77,6 +79,7 @@ pub struct Log {
 fn def_true() -> bool {
     true
 }
+
 fn def_false() -> bool {
     false
 }
@@ -90,6 +93,8 @@ pub struct Token {
     pub is_admin: bool,
     #[serde(default = "def_true")]
     pub enabled: bool,
+    #[serde(default = "def_true")]
+    pub api_access: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -251,6 +256,30 @@ pub fn load_configuration() -> Result<Config, ConfigurationError> {
     };
 
     let mut configuration = Config::new(server);
+
+    // if a root username and password were provided, add them to the list of valid accesskey
+    let root_username: Option<String> = match env::var(ROOT_ACCESS_KEY) {
+        Ok(val) => Some(val),
+        Err(_) => None,
+    };
+    let root_password: Option<String> = match env::var(ROOT_SECRET_KEY) {
+        Ok(val) => Some(val),
+        Err(_) => None,
+    };
+    // if both are provided
+    if root_username.is_some() && root_password.is_some() {
+        configuration.tokens.insert(
+            root_username.clone().unwrap(),
+            Token {
+                access_key: root_username.clone().unwrap(),
+                secret_key: root_password.clone().unwrap(),
+                is_admin: true,
+                enabled: true,
+                description: None,
+                api_access: false,
+            },
+        );
+    }
 
     // store datasource names in the structs
     for (name, ds) in &mut configuration.datastore {
