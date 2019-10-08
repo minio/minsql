@@ -32,7 +32,7 @@ export MINSQL_ROOT_SECRET_KEY=minsqlsecretkeypleasechangexxxx
 ./minsql
 ```
 
-Then go to `http://127.0.0.0.1:9999/ui/` and login with the provided `MINSQL_ROOT_ACCESS_KEY` and  `MINSQL_ROOT_SECRET_KEY`. 
+Then go to `http://127.0.0.1:9999/ui/` and login with the provided `MINSQL_ROOT_ACCESS_KEY` and  `MINSQL_ROOT_SECRET_KEY`. 
 
 ##### Docker
 Create the compose file
